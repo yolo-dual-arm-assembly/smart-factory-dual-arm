@@ -1,0 +1,9 @@
+# Change these class names to the objects you want to detect.
+# 이미지와 라벨은 레포 루트의 train_set/에 두고, 정의 파일만 이 패키지가 관리한다.
+# path는 이 yaml 파일 위치 기준이다: config → vision_inspection → src → ros2_ws → 루트
+path: ../../../../train_set
+train: images/train
+val: images/val
+
+names:
+  0: robot

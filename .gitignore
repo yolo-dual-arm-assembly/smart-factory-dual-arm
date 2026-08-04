@@ -1,0 +1,85 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Python tooling, coverage, and package build outputs
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environment/bootstrap files created while setting up this workspace
+/.cache/
+/.conda/
+/.mamba/
+/micromamba_root/
+/bin/
+/get-pip.py
+/virtualenv.pyz
+
+# Local YOLO models and workspace-specific tool settings
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.engine
+*.torchscript
+*.tflite
+*_openvino_model/
+*_saved_model/
+*_ncnn_model/
+.vscode/
+.claude/
+.codex/
+.agents/
+
+# Local secrets and operating-system metadata
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keep only the empty input/output directories in Git.
+object/*
+!object/.gitkeep
+result/*
+!result/.gitkeep
+
+# Local training data and generated training runs
+train_set/images/train/*
+!train_set/images/train/.gitkeep
+train_set/images/val/*
+!train_set/images/val/.gitkeep
+train_set/labels/train/*
+!train_set/labels/train/.gitkeep
+train_set/labels/val/*
+!train_set/labels/val/.gitkeep
+train_set/**/*.cache
+runs/
+
+# Machine-specific camera/robot calibration and taught joint poses.
+# 폴더 구조는 남기고 장비별 값만 제외한다.
+ros2_ws/src/omx1_loading/config/*
+!ros2_ws/src/omx1_loading/config/.gitkeep
+
+# 모델 가중치는 용량이 커서 Release나 공유 드라이브로 전달한다.
+models/*
+!models/.gitkeep
+!models/README.md
+
+# colcon 빌드 산출물
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Runtime logs and crash dumps
+*.log
+/core
+/core.*

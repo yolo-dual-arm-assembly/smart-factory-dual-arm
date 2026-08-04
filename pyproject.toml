@@ -1,0 +1,50 @@
+[project]
+name = "yolo-demo"
+version = "0.1.0"
+description = "OMX 2대와 YOLO 검사를 묶는 ROS2 워크스페이스와 통합 운영 GUI"
+requires-python = ">=3.11"
+dependencies = [
+    "Pillow==11.3.0",
+    "ultralytics==8.4.102",
+    "dynamixel-sdk==4.0.5",
+]
+
+[project.scripts]
+yolo-app = "system_monitor.ui.viewer:main"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+# ROS2 패키지는 pkg/pkg/*.py 구조라 import 경로가 바깥쪽 패키지 폴더다.
+# colcon 없이 개발할 때도 `pip install -e .`로 같은 이름을 쓸 수 있게 매핑한다.
+[tool.setuptools]
+packages = [
+    "common",
+    "vision_inspection",
+    "omx1_loading",
+    "omx2_sorting",
+    "system_coordinator",
+    "system_monitor",
+    "system_monitor.ui",
+]
+
+[tool.setuptools.package-dir]
+common = "common"
+vision_inspection = "ros2_ws/src/vision_inspection/vision_inspection"
+omx1_loading = "ros2_ws/src/omx1_loading/omx1_loading"
+omx2_sorting = "ros2_ws/src/omx2_sorting/omx2_sorting"
+system_coordinator = "ros2_ws/src/system_coordinator/system_coordinator"
+system_monitor = "ros2_ws/src/system_monitor/system_monitor"
+"system_monitor.ui" = "ros2_ws/src/system_monitor/system_monitor/ui"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 설치 없이도 노드 패키지를 import할 수 있게 한다.
+pythonpath = [
+    ".",
+    "ros2_ws/src/vision_inspection",
+    "ros2_ws/src/omx1_loading",
+    "ros2_ws/src/omx2_sorting",
+    "ros2_ws/src/system_coordinator",
+    "ros2_ws/src/system_monitor",
+]

@@ -1,0 +1,3 @@
+Pillow==11.3.0
+ultralytics==8.4.102
+dynamixel-sdk==4.0.5
