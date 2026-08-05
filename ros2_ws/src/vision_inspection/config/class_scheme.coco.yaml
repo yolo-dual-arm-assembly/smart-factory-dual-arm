@@ -1,0 +1,25 @@
+# COCO 사전학습 모델(yolov8n.pt 등)로 파이프라인을 시험할 때만 쓰는 설정.
+#
+# 학습된 best.pt가 나오면 이 파일은 쓸 일이 없다. 운영 설정은 class_scheme.yaml.
+# COCO는 공을 'ball'이 아니라 'sports ball'이라고 부르기 때문에 따로 둔다.
+#
+# 사용:
+#   python -m vision_inspection.inspection_logic --source object/사진.jpg \
+#       --scheme ros2_ws/src/vision_inspection/config/class_scheme.coco.yaml \
+#       --target-count 2 --conf 0.1
+#
+# COCO 모델은 공을 학습한 적이 없어 신뢰도가 낮게(0.2~0.5) 나온다. conf를
+# 0.25 이상 올리면 공을 놓치고, 0.05 아래로 내리면 엉뚱한 것이 섞인다.
+
+# 시험용 사진마다 공 개수가 달라서 개수 검사는 꺼 둔다.
+# 개수 판정을 보려면 --target-count로 직접 준다.
+target_count: null
+
+ball_names: [sports ball]
+defect_names: []
+
+# 오투입 시험용. COCO에는 'others' 클래스가 없으므로, 바구니에 넣어 볼
+# 물건의 COCO 이름(예: cup, book, cell phone)을 적어서 시험한다.
+foreign_names: []
+
+count_defects_as_balls: true
