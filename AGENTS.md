@@ -1,5 +1,42 @@
 # Repository Guidelines
 
+## Agent Scope & Environment Safety
+
+Before editing files, identify exactly one owning package under `ros2_ws/src/`
+for the task. By default, modify only that package and tests directly associated
+with it. Prefer a package-local implementation even when a shared abstraction
+would be more convenient.
+
+Treat these paths as protected and do not modify them without explicit user
+approval for the specific shared change:
+
+- `common/`
+- `ros2_ws/src/project_interfaces/`
+- every ROS2 package other than the owning package
+- `main.py`, `pyproject.toml`, and `requirements.txt`
+- repository-wide build, test, tooling, and environment configuration
+
+If a package-local implementation is insufficient, stop before editing a
+protected path and report:
+
+1. the owning package and current allowed scope;
+2. the exact protected files that would need to change;
+3. why the change cannot remain package-local;
+4. the expected impact on other packages and a local alternative, if one exists.
+
+Agents must not use `sudo`, install packages globally, modify shell startup
+files, alter global Git/Python/pip/ROS/OS configuration, create machine-wide
+environment variables, or write outside this repository. Use only the
+repository virtual environment and package-local configuration. Installing or
+updating dependencies requires explicit user approval.
+
+Do not import one ROS2 node package from another. Cross-node communication must
+use ROS2 interfaces, and cross-package values must follow `common/messages.py`.
+Do not move package-specific helpers into `common/` merely for convenience.
+
+Before finishing, run `git diff --name-only`, verify that every changed file is
+inside the approved scope, and explicitly report any approved scope exception.
+
 ## Project Structure & Module Organization
 
 A dual-OMX + YOLO inspection cell, split into five ROS2 nodes. One repository, one package per node, one owner per package.
