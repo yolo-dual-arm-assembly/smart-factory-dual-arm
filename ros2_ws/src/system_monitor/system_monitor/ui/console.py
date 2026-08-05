@@ -58,7 +58,12 @@ class ConsolePanel(ttk.LabelFrame):
     """Read-only console widget fed from a message queue."""
 
     def __init__(
-        self, master: tk.Misc, message_queue: queue.SimpleQueue[str]
+        self,
+        master: tk.Misc,
+        message_queue: queue.SimpleQueue[str],
+        *,
+        height: int = 9,
+        width: int = 80,
     ) -> None:
         super().__init__(master, text="콘솔 출력", padding=(8, 6))
         self._queue = message_queue
@@ -67,7 +72,10 @@ class ConsolePanel(ttk.LabelFrame):
 
         self.text = tk.Text(
             self,
-            height=9,
+            # 대시보드는 영상에 공간을 더 주려고 낮고 좁게 쓴다. Text의 기본
+            # 폭(80자)은 창을 그만큼 넓게 벌려 놓아 창이 줄지 않는다.
+            height=height,
+            width=width,
             wrap="word",
             state="disabled",
             background=CONSOLE_BG,
