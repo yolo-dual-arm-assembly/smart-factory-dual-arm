@@ -28,6 +28,15 @@ class InspectionResult:
     def is_pass(self) -> bool:
         return self.result is RobotState.PASS
 
+    @property
+    def normal_count(self) -> int:
+        """정상 개수. ``InspectBasket.srv``의 같은 이름 필드에 그대로 넣는다.
+
+        빼기 한 번이지만 담당자마다 직접 계산하면 total과 defect의 의미가
+        갈라진다. 파생값도 여기서만 만든다.
+        """
+        return self.total_count - self.defect_count
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "total_count": self.total_count,

@@ -21,6 +21,7 @@ Z축은 테이블 높이로 고정한다.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -200,6 +201,3 @@ class OmxCalibration:
     def is_ready(self) -> bool:
         """Homography가 계산된 상태인지 확인한다."""
         return self._H is not None
-
-
-import math  # noqa: E402 (파일 하단 import 허용 — OmxCalibration 내부에서만 사용)

@@ -1,7 +1,7 @@
 # vision_inspection — YOLO 검사 (담당: 1·2번)
 
 바구니 안 공 개수와 불량을 판정해
-[`InspectionResult`](../../../common/messages.py)로 돌려주는 것이 이 패키지의
+[`InspectionResult`](../common/common/messages.py)로 돌려주는 것이 이 패키지의
 최종 책임입니다. 1번이 모델 학습·데이터셋(`train.py`, `training.py`,
 `models.py`), 2번이 카메라·검사(`vision_node.py`, `inspection_logic.py`)를 맡습니다.
 

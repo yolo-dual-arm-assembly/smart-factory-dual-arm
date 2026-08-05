@@ -35,12 +35,16 @@ SAFE_X_RANGE = (0.10, 0.25)
 SAFE_Y_RANGE = (-0.15, 0.15)
 
 
-def is_safe_approach_target(x: float, y: float, z: float) -> bool:
-    """목표점이 지정 작업 영역과 역기구학 범위 안에 있는지 확인한다."""
-    if not (SAFE_X_RANGE[0] <= x <= SAFE_X_RANGE[1]):
-        return False
-    if not (SAFE_Y_RANGE[0] <= y <= SAFE_Y_RANGE[1]):
-        return False
+def is_in_safe_rectangle(x: float, y: float) -> bool:
+    """목표점이 지정 작업 사각형 안인지 확인한다."""
+    return (
+        SAFE_X_RANGE[0] <= x <= SAFE_X_RANGE[1]
+        and SAFE_Y_RANGE[0] <= y <= SAFE_Y_RANGE[1]
+    )
+
+
+def is_reachable(x: float, y: float, z: float) -> bool:
+    """역기구학 해가 존재하고 관절 한계 안인지 확인한다."""
     try:
         ik_5dof(x, y, z)
     except ValueError:
@@ -48,23 +52,46 @@ def is_safe_approach_target(x: float, y: float, z: float) -> bool:
     return True
 
 
+def is_safe_approach_target(x: float, y: float, z: float) -> bool:
+    """목표점이 지정 작업 영역과 역기구학 범위 안에 있는지 확인한다."""
+    return is_in_safe_rectangle(x, y) and is_reachable(x, y, z)
+
+
 def validate_calibration_workspace(calibration: OmxCalibration) -> None:
-    """캘리브레이션 좌표의 단위와 OMX 작업 영역을 확인한다."""
-    invalid_points = [
-        (x, y)
-        for x, y in calibration.robot_points
-        if not (
-            SAFE_X_RANGE[0] <= x <= SAFE_X_RANGE[1]
-            and SAFE_Y_RANGE[0] <= y <= SAFE_Y_RANGE[1]
-        )
+    """캘리브레이션 좌표의 단위와 OMX 작업 영역을 확인한다.
+
+    작업 사각형은 팔이 실제로 그리는 영역보다 넓다. 사각형의 네 모서리는
+    역기구학으로 도달하지 못하므로 사각형 검사만으로는 부족하고, 실제로 쓸
+    두 높이(접근·집기)에서 해가 나오는지까지 확인한다.
+    """
+    outside_rectangle = [
+        (x, y) for x, y in calibration.robot_points if not is_in_safe_rectangle(x, y)
     ]
-    if invalid_points:
+    if outside_rectangle:
         formatted = ", ".join(
-            f"({x * 100:.1f}, {y * 100:.1f})cm" for x, y in invalid_points
+            f"({x * 100:.1f}, {y * 100:.1f})cm" for x, y in outside_rectangle
         )
         raise ValueError(
             "캘리브레이션 로봇 좌표가 작업 영역 밖입니다: "
             f"{formatted}. X=10~25cm, Y=-15~15cm로 다시 설정하세요."
+        )
+
+    work_heights = (calibration.approach_z, calibration.pick_z)
+    unreachable = [
+        (x, y, blocked)
+        for x, y in calibration.robot_points
+        if (blocked := [z for z in work_heights if not is_reachable(x, y, z)])
+    ]
+    if unreachable:
+        formatted = ", ".join(
+            f"({x * 100:.1f}, {y * 100:.1f})cm"
+            f"[Z={'/'.join(f'{z * 100:.1f}' for z in heights)}cm]"
+            for x, y, heights in unreachable
+        )
+        raise ValueError(
+            "캘리브레이션 로봇 좌표가 역기구학 도달 범위 밖입니다: "
+            f"{formatted}. 사각형 모서리 쪽은 팔이 닿지 않으므로 로봇에 더 "
+            "가까운 지점으로 다시 잡으세요."
         )
 
 
@@ -200,6 +227,19 @@ class OmxVisionRunner:
                 else:
                     self._reset_detection()
                     self._miss_count += 1
+                    # 한 프레임 놓쳤다고 중단하지 않되, 연속으로 놓치면 팔을
+                    # 뻗은 채로 방치하지 않고 홈으로 접는다.
+                    if (
+                        self._state is not State.WAIT
+                        and self._miss_count >= self.miss_frames
+                    ):
+                        print(
+                            f"[Vision] {self.miss_frames}프레임 연속 탐지 실패 — 홈 복귀"
+                        )
+                        self.controller.home()
+                        self._state = State.WAIT
+                        self._last_target = None
+                        self._miss_count = 0
 
                 cv2.imshow("OMX Vision Control", result_frame)
                 key = cv2.waitKey(1)

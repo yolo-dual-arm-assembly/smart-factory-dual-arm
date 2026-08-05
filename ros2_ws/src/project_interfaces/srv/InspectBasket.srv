@@ -1,0 +1,9 @@
+# 바구니 1회 검사 요청(Service). 통합 제어기(coordinator) → 검사 노드(vision).
+# 요청하면 결과가 바로 돌아오는 단발성 작업이라 Service로 둔다.
+int32 target_count        # 바구니에 있어야 할 공 개수. 0이면 개수 검사를 하지 않는다
+---
+int32 total_count         # 실제로 센 공 전체 개수
+int32 normal_count        # 그중 정상 개수 (total_count - defect_count)
+int32 defect_count        # 그중 불량 개수
+bool passed               # 합격 여부. common.messages.InspectionResult.is_pass와 같은 값이어야 한다
+string message            # 실패 이유 등 사람이 읽을 설명

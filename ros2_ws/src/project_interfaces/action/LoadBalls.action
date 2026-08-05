@@ -1,0 +1,10 @@
+# OMX 1 공 투입(Action). 통합 제어기(coordinator) → 적재 노드(omx1_loading).
+# 여러 개를 집어 옮기는 동안 진행 상황을 계속 봐야 하므로 Action으로 둔다.
+int32 target_count        # 투입할 공 개수
+---
+bool success              # 목표 개수를 모두 투입했는지
+int32 loaded_count        # 실제로 투입한 개수
+string message            # 실패 이유 등 사람이 읽을 설명
+---
+int32 current_count       # 지금까지 투입한 개수
+string state              # common.constants.RobotState 값을 그대로 쓴다
