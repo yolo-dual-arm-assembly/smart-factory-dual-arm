@@ -20,6 +20,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 MINIMUM_PYTHON = (3, 11)
+# 프로젝트 개발 기준 버전이다. 패치 버전까지 고정하지는 않으며 3.11 이상을
+# 지원한다.
+DEVELOPMENT_PYTHON = (3, 11, 9)
 # tkinter는 GUI, 나머지는 이미지 처리와 추론에 반드시 필요하다.
 REQUIRED_MODULES = ("tkinter", "PIL", "cv2", "ultralytics")
 # 자동 전환이 되풀이되지 않도록 넘겨받은 프로세스에 표시를 남긴다.
@@ -204,7 +207,54 @@ def interpreter_is_ready(executable: Path | str) -> bool:
     return result.returncode == 0
 
 
-def _guidance(absent: list[str]) -> str:
+def _linux_setup_guidance(absent: list[str]) -> list[str]:
+    """Linux 첫 실행에 필요한 가상환경 설치 절차를 반환한다."""
+    tested = ".".join(str(part) for part in DEVELOPMENT_PYTHON)
+    venv_python = PROJECT_DIR / ".venv" / "bin" / "python"
+    python_command = sys.executable if python_is_supported() else "python3.11"
+
+    lines = [
+        f"이 프로젝트는 Python 3.11 이상이 필요합니다(개발 기준: {tested}).",
+        "Linux에서는 시스템 Python에 pip 패키지를 직접 설치하지 않고",
+        "프로젝트 전용 가상환경(.venv)을 사용하십시오.",
+        "",
+    ]
+    if not python_is_supported():
+        lines += [
+            "먼저 배포판에 맞는 방법으로 Python 3.11 이상을 설치하십시오.",
+            "아래 python3.11은 설치한 Python 3.11 이상의 실행 파일로 바꿔도 됩니다.",
+            "",
+        ]
+
+    if "tkinter" in absent:
+        lines += [
+            "1. Tkinter와 가상환경 도구 설치",
+            "  Debian/Ubuntu:",
+            "    sudo apt update",
+            "    sudo apt install -y python3-venv python3-tk",
+            "  Fedora:",
+            "    sudo dnf install -y python3-tkinter",
+            "",
+        ]
+
+    step = "2" if "tkinter" in absent else "1"
+    lines += [
+        f"{step}. 프로젝트 가상환경 생성 및 의존성 설치",
+        f'    cd "{PROJECT_DIR}"',
+        f'    "{python_command}" -m venv .venv',
+        f'    "{venv_python}" -m pip install --upgrade pip',
+        f'    "{venv_python}" -m pip install -r requirements.txt',
+        "",
+        f"{int(step) + 1}. VS Code에서 가상환경 선택",
+        "    Ctrl+Shift+P -> Python: Select Interpreter",
+        f"    {venv_python}",
+        "",
+        "선택한 뒤 main.py의 실행 버튼을 다시 누르십시오.",
+    ]
+    return lines
+
+
+def _guidance(absent: list[str], platform: str | None = None) -> str:
     lines = [
         "",
         "이 Python으로는 앱을 실행할 수 없습니다.",
@@ -218,6 +268,7 @@ def _guidance(absent: list[str]) -> str:
         lines.append(f"  없는 모듈        : {', '.join(absent)}")
     lines.append("")
 
+    current_platform = sys.platform if platform is None else platform
     if is_mingw_python():
         lines += [
             "MSYS2/MinGW Python은 이 앱에 사용할 수 없습니다. pip로도 해결되지",
@@ -226,6 +277,8 @@ def _guidance(absent: list[str]) -> str:
             "python.org 배포판이나 프로젝트 가상환경을 사용하십시오.",
             "  https://www.python.org/downloads/",
         ]
+    elif current_platform.startswith("linux"):
+        lines += _linux_setup_guidance(absent)
     else:
         lines += [
             "의존성을 설치하려면 지금 이 Python에 그대로 설치하십시오.",

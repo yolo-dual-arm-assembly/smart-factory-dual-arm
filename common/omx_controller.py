@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from common.serial_ports import default_omx_port
+from common.serial_ports import default_omx_port, serial_permission_guidance
 
 try:
     from dynamixel_sdk import (
@@ -284,6 +284,9 @@ class OmxController:
             raise RuntimeError(
                 "dynamixel-sdk 미설치: pip install dynamixel-sdk 후 재시도하세요."
             )
+        permission_guidance = serial_permission_guidance(self.config.port)
+        if permission_guidance is not None:
+            raise PermissionError(permission_guidance)
         ph = PortHandler(self.config.port)
         if not ph.openPort():
             raise RuntimeError(f"포트 열기 실패: {self.config.port}")

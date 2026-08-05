@@ -3,8 +3,10 @@ import sys
 from pathlib import Path
 
 from common.bootstrap import (
+    DEVELOPMENT_PYTHON,
     MINIMUM_PYTHON,
     REQUIRED_MODULES,
+    _guidance,
     candidate_interpreters,
     ensure_runtime,
     interpreter_is_ready,
@@ -20,6 +22,10 @@ def test_python_is_supported_compares_minimum() -> None:
     assert python_is_supported(MINIMUM_PYTHON)
     assert python_is_supported((99, 0))
     assert not python_is_supported((3, 8))
+
+
+def test_development_python_satisfies_minimum() -> None:
+    assert DEVELOPMENT_PYTHON[:2] >= MINIMUM_PYTHON
 
 
 def test_missing_modules_reports_only_absent_names() -> None:
@@ -103,3 +109,16 @@ def test_report_writes_message_when_encoding_allows() -> None:
     report("한글 안내", stream=stream)
 
     assert "한글 안내" in stream.getvalue()
+
+
+def test_linux_guidance_uses_project_venv_instead_of_system_pip() -> None:
+    guidance = _guidance(
+        ["tkinter", "PIL", "cv2", "ultralytics"], platform="linux"
+    )
+
+    assert "Python 3.11 이상" in guidance
+    assert "개발 기준: 3.11.9" in guidance
+    assert "sudo apt install -y python3-venv python3-tk" in guidance
+    assert ".venv/bin/python" in guidance
+    assert "Python: Select Interpreter" in guidance
+    assert "지금 이 Python에 그대로 설치" not in guidance

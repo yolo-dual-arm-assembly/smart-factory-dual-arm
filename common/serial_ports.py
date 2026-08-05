@@ -6,9 +6,13 @@
 """
 from __future__ import annotations
 
+import getpass
+import os
 import re
+import shlex
 import sys
 from collections.abc import Iterable
+from pathlib import Path
 
 # 블루투스 가상 COM 포트는 항상 목록에 잡히지만 로봇 포트가 아니다.
 BLUETOOTH_HINTS = ("bluetooth", "블루투스")
@@ -94,3 +98,39 @@ def list_serial_ports() -> list[tuple[str, str]]:
 def default_omx_port() -> str:
     """현재 OS와 연결 상태에 맞는 OMX 기본 포트 이름을 반환한다."""
     return choose_serial_port(list_serial_ports(), fallback_port())
+
+
+def serial_permission_guidance(
+    port: str,
+    *,
+    platform: str = sys.platform,
+    username: str | None = None,
+) -> str | None:
+    """Linux 시리얼 장치의 읽기·쓰기 권한이 없으면 해결 안내를 반환한다.
+
+    장치가 없거나 다른 운영체제이면 케이블·포트 선택 문제일 수 있으므로 권한
+    문제로 단정하지 않는다. 권한 변경은 앱이 대신 실행하지 않고 사용자가 한 번
+    명시적으로 수행하도록 명령만 안내한다.
+    """
+    if not platform.startswith("linux"):
+        return None
+
+    device = Path(port)
+    try:
+        lacks_permission = device.exists() and not os.access(
+            device, os.R_OK | os.W_OK
+        )
+    except OSError:
+        return None
+    if not lacks_permission:
+        return None
+
+    account = username or getpass.getuser()
+    quoted_account = shlex.quote(account)
+    return (
+        f"Linux 시리얼 포트 권한이 없습니다: {port}\n\n"
+        "터미널에서 다음 명령을 한 번 실행하세요.\n\n"
+        f"sudo usermod -aG dialout {quoted_account}\n"
+        "sudo reboot\n\n"
+        "재부팅 후 앱을 다시 실행하세요."
+    )
