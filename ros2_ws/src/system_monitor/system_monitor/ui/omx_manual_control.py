@@ -35,14 +35,25 @@ from common.omx_controller import (
     dxl_to_angle,
     gripper_percent_to_dxl,
 )
-from common.serial_ports import default_omx_port
+from common.serial_ports import list_serial_ports
+from system_monitor.ui.device_roles import assign_omx_ports, fallback_omx_port
 from system_monitor.ui.ui_fonts import configure_korean_fonts
+
+
+def default_manual_port() -> str:
+    """수동 제어에 쓸 기본 포트.
+
+    대시보드가 띄울 때는 ``--port``로 배정 결과를 넘겨준다. 이 파일을 직접
+    실행했을 때도 같은 규칙으로 고르도록 적재 팔(OMX 1) 포트를 기본값으로 쓴다.
+    """
+    loading_port, _sorting_port = assign_omx_ports(list_serial_ports())
+    return loading_port or fallback_omx_port()
 
 
 class OmxGuiApp(tk.Tk):
     def __init__(self, port: str | None = None) -> None:
         super().__init__()
-        port = port or default_omx_port()
+        port = port or default_manual_port()
         configure_korean_fonts(self)
         self.title("ROBOTIS OMX Joint Controller")
         self.geometry("640x580")
@@ -412,7 +423,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ROBOTIS OMX 수동 관절 제어 GUI")
     parser.add_argument(
         "--port",
-        default=default_omx_port(),
+        default=default_manual_port(),
         help="OMX 시리얼 포트 (기본: 연결된 USB 시리얼 포트 자동 선택)",
     )
     args = parser.parse_args()
