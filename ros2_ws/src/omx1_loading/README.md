@@ -1,7 +1,7 @@
 # omx1_loading — 첫 번째 OMX·적재 (담당: 3번)
 
 공을 집어 바구니에 담는 로봇 노드입니다. Dynamixel 통신 자체는 레포 루트의
-[`common/omx_controller.py`](../../../common/omx_controller.py)를 그대로 씁니다.
+[`common/omx_controller.py`](../common/common/omx_controller.py)를 그대로 씁니다.
 
 | 파일 | 역할 |
 |---|---|

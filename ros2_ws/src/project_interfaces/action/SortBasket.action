@@ -1,0 +1,8 @@
+# OMX 2 이송(Action). 통합 제어기(coordinator) → 분류 노드(omx2_sorting).
+# 바구니를 정상/불량 구역까지 옮기는 동안 상태를 계속 봐야 하므로 Action으로 둔다.
+string destination        # NORMAL 또는 REJECT. common.constants.RobotState의 PASS/REJECT 판정에서 정한다
+---
+bool success              # 이송 완료 여부
+string message            # 실패 이유 등 사람이 읽을 설명
+---
+string state              # common.constants.RobotState 값을 그대로 쓴다

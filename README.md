@@ -17,7 +17,7 @@ Windows에서는 ROS2 없이 GUI·CLI·테스트를 실행할 수 있습니다.
 | `omx2_sorting` | 이동·정상·불량 모션 스캐폴드만 있으며 ROS2 노드는 미작성 |
 | `system_coordinator` | 상태 머신과 장비 없는 공정 흐름 로직만 있으며 ROS2 노드는 미작성 |
 | `system_monitor` | 통합 GUI만 있으며 ROS2 노드는 미작성 |
-| ROS2 인터페이스 | `DetectionResult.msg` 구현. 문서의 서비스·액션은 아직 미작성 |
+| ROS2 인터페이스 | `DetectionResult.msg`, `InspectBasket.srv`, `LoadBalls.action`, `SortBasket.action` 정의 완료. 이를 제공하는 **서버 노드는 아직 미작성** |
 
 완료되지 않은 노드까지 실제 공정에 연결된 것으로 가정하면 안 됩니다. 상세 구조와
 통신 규격은 [시스템 구조](docs/system_architecture.md)와
@@ -245,9 +245,9 @@ ls -l /dev/video*
 ```text
 smart-factory-dual-arm/
 ├── main.py                  # 통합 GUI 진입점과 런타임 검사
-├── common/                  # 경로, 메시지, 카메라, 시리얼, OMX, bootstrap
 ├── ros2_ws/
 │   └── src/
+│       ├── common/          # 경로, 메시지, 카메라, 시리얼, OMX, bootstrap
 │       ├── project_interfaces/
 │       ├── vision_inspection/
 │       ├── omx1_loading/
@@ -264,7 +264,9 @@ smart-factory-dual-arm/
 └── pyproject.toml
 ```
 
-ROS2 패키지는 `pkg/pkg/*.py` 구조입니다. `main.py`는
+ROS2 패키지는 `pkg/pkg/*.py` 구조입니다. 공용 코드인 `common`도 같은 구조의
+워크스페이스 패키지라 `ros2_ws/src/common/common/`에 있고, import 경로는
+`from common.messages import ...` 그대로입니다. `main.py`는
 `common.bootstrap.ensure_workspace_path()`로 import 경로를 등록하므로 설치 없이도
 GUI가 실행됩니다. 다른 폴더에서도 모듈 명령과 `yolo-app`을 사용하려면 개발 모드로
 설치합니다.
@@ -285,7 +287,7 @@ python -m pip install -e .
 
 ## ROS2 빌드와 실행
 
-ROS2는 Linux에서만 빌드합니다. 현재 colcon 빌드 대상은
+ROS2는 Linux에서만 빌드합니다. 현재 colcon 빌드 대상은 `common`,
 `project_interfaces`, `vision_inspection`, `omx1_loading`이며 나머지 패키지는 아직
 ROS2 노드가 없습니다.
 

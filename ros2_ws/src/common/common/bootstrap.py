@@ -19,6 +19,8 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
+from common.constants import find_project_dir
+
 MINIMUM_PYTHON = (3, 11)
 # 프로젝트 개발 기준 버전이다. 패치 버전까지 고정하지는 않으며 3.11 이상을
 # 지원한다.
@@ -27,7 +29,9 @@ DEVELOPMENT_PYTHON = (3, 11, 9)
 REQUIRED_MODULES = ("tkinter", "PIL", "cv2", "ultralytics")
 # 자동 전환이 되풀이되지 않도록 넘겨받은 프로세스에 표시를 남긴다.
 RELAUNCH_FLAG = "YOLO_APP_RELAUNCHED"
-PROJECT_DIR = Path(__file__).resolve().parents[1]
+# 이 파일도 ros2_ws/src/common/common/에 있으므로 고정 단계 수로 루트를 잡을 수
+# 없다. 판별 규칙은 common.constants 한 곳에만 둔다.
+PROJECT_DIR = find_project_dir()
 # 윈도우 스토어 별칭은 실제 Python이 아니라 설치 안내를 띄우는 껍데기다.
 EXCLUDED_PATH_HINTS = ("windowsapps",)
 # ROS2 관례상 패키지 안에 같은 이름의 모듈 폴더가 있다(pkg/pkg/*.py).

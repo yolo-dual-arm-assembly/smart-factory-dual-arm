@@ -11,7 +11,7 @@
 
 ## 시작하는 법
 
-로봇 통신은 새로 만들지 말고 레포 루트 `common/omx_controller.py`의 `OmxController`를
+로봇 통신은 새로 만들지 말고 `common` 패키지의 `omx_controller.py`의 `OmxController`를
 씁니다. 이동 시퀀스 예시는 `omx1_loading/imitation_control.py`에 있습니다.
 
 ```python

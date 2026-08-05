@@ -10,7 +10,7 @@ would be more convenient.
 Treat these paths as protected and do not modify them without explicit user
 approval for the specific shared change:
 
-- `common/`
+- `ros2_ws/src/common/`
 - `ros2_ws/src/project_interfaces/`
 - every ROS2 package other than the owning package
 - `main.py`, `pyproject.toml`, and `requirements.txt`
@@ -31,8 +31,15 @@ repository virtual environment and package-local configuration. Installing or
 updating dependencies requires explicit user approval.
 
 Do not import one ROS2 node package from another. Cross-node communication must
-use ROS2 interfaces, and cross-package values must follow `common/messages.py`.
-Do not move package-specific helpers into `common/` merely for convenience.
+use ROS2 interfaces, and cross-package values must follow the dataclasses in the
+`common` package. Do not move package-specific helpers into `common` merely for
+convenience.
+
+`system_monitor` is the one exception: the operator GUI is an application layer,
+not a node, and must run without ROS2, so it may import `vision_inspection` and
+`omx1_loading`. The dependency only ever points GUI → node package. A node
+package must never import `system_monitor` — that breaks the colcon install,
+which does not ship the GUI package.
 
 Before finishing, run `git diff --name-only`, verify that every changed file is
 inside the approved scope, and explicitly report any approved scope exception.
@@ -42,8 +49,8 @@ inside the approved scope, and explicitly report any approved scope exception.
 A dual-OMX + YOLO inspection cell, split into five ROS2 nodes. One repository, one package per node, one owner per package.
 
 - `main.py`: entry point for the integrated Tkinter GUI (runtime check, workspace path setup, then `system_monitor.ui.viewer:main`).
-- `common/`: shared by every package — `constants.py` (paths, `RobotState`, `RobotId`), `messages.py` (dataclass interchange formats), `logger.py`, `camera.py`, `serial_ports.py`, `omx_controller.py`, `bootstrap.py`.
-- `ros2_ws/src/project_interfaces/`: `msg/DetectionResult.msg`. The `srv`/`action` definitions in `docs/communication_protocol.md` are not written yet.
+- `ros2_ws/src/common/`: shared by every package (ament_python, not a node) — `constants.py` (paths, `RobotState`, `RobotId`), `messages.py` (dataclass interchange formats), `logger.py`, `camera.py`, `serial_ports.py`, `omx_controller.py`, `bootstrap.py`. Laid out as `common/common/*.py`, so the import root is `ros2_ws/src/common` and imports stay `from common.x import y`.
+- `ros2_ws/src/project_interfaces/`: `msg/DetectionResult.msg`, `srv/InspectBasket.srv`, `action/LoadBalls.action`, `action/SortBasket.action`. The definitions exist; no node serves the srv/action yet.
 - `ros2_ws/src/vision_inspection/`: `vision_node.py` (rclpy), `inspection_logic.py` (basket verdict), `analysis.py`, `models.py`, `training.py`, `train.py` / `detect.py` (CLIs), `config/data.yaml`.
 - `ros2_ws/src/omx1_loading/`: `loading_node.py` (rclpy), `coordinate_transform.py`, `camera_calibration.py`, vision/imitation runners, teaching data and window, `config/` for machine-specific calibration and taught poses (Git-ignored).
 - `ros2_ws/src/omx2_sorting/`: basket move, pass/reject motions (scaffolded, no node yet).
@@ -53,9 +60,11 @@ A dual-OMX + YOLO inspection cell, split into five ROS2 nodes. One repository, o
 - `docs/`: `system_architecture.md`, `communication_protocol.md`, `calibration.md`. `ros2_ws/README.md` covers colcon build and node launch.
 - `tests/`: pytest suite for non-UI logic.
 
-ROS2 packages use the `pkg/pkg/*.py` layout, so the import root is the outer package folder. `common.bootstrap.ensure_workspace_path()` registers those paths at runtime and `pyproject.toml`'s `pythonpath` does it for pytest; `pip install -e .` makes `python -m <package>.<module>` work anywhere.
+ROS2 packages use the `pkg/pkg/*.py` layout, so the import root is the outer package folder. `common.bootstrap.ensure_workspace_path()` registers those paths at runtime and `pyproject.toml`'s `pythonpath` does it for pytest; `pip install -e .` makes `python -m <package>.<module>` work anywhere. `main.py` puts `ros2_ws/src/common` on `sys.path` itself, because the function that registers the rest lives inside `common`.
 
-Keep new logic in the matching package. Nodes never import each other — cross-node data goes through ROS2 interfaces, and any value crossing a package boundary must be a `common/messages.py` dataclass. Update `docs/communication_protocol.md` in the same PR when that format changes.
+`PROJECT_DIR` (repo root, used for `object/`, `result/`, `models/`) is resolved by walking up for a directory holding both `main.py` and `ros2_ws`, not by a fixed number of `parents[]` steps — colcon copies `common` into `install/`, which changes the depth. Override it with `SMART_FACTORY_PROJECT_DIR` when running from outside the source tree.
+
+Keep new logic in the matching package. Nodes never import each other — cross-node data goes through ROS2 interfaces, and any value crossing a package boundary must be a `common.messages` dataclass. Update `docs/communication_protocol.md` in the same PR when that format changes.
 
 ## Build, Test, and Development Commands
 

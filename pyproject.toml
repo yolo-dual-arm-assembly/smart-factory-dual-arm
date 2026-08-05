@@ -29,7 +29,7 @@ packages = [
 ]
 
 [tool.setuptools.package-dir]
-common = "common"
+common = "ros2_ws/src/common/common"
 vision_inspection = "ros2_ws/src/vision_inspection/vision_inspection"
 omx1_loading = "ros2_ws/src/omx1_loading/omx1_loading"
 omx2_sorting = "ros2_ws/src/omx2_sorting/omx2_sorting"
@@ -42,6 +42,7 @@ testpaths = ["tests"]
 # 설치 없이도 노드 패키지를 import할 수 있게 한다.
 pythonpath = [
     ".",
+    "ros2_ws/src/common",
     "ros2_ws/src/vision_inspection",
     "ros2_ws/src/omx1_loading",
     "ros2_ws/src/omx2_sorting",

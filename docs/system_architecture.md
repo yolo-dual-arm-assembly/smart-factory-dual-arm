@@ -28,18 +28,19 @@ ROS2 인터페이스로만 데이터를 주고받는다.
 
 ## 패키지와 담당
 
-레포는 하나의 ROS2 워크스페이스(`ros2_ws/`)이고, 공용 파이썬 코드만 레포
-루트의 `common/`에 둔다.
+레포는 하나의 ROS2 워크스페이스(`ros2_ws/`)이고, 공용 파이썬 코드도
+`ros2_ws/src/common/`에 ament 패키지로 둔다. 폴더가 `common/common/*.py`
+구조라 import는 예전과 똑같이 `from common.messages import ...`이다.
 
 | 패키지 | 담당 | 현재 들어 있는 것 |
 |---|---|---|
-| `project_interfaces` | 5번 | `msg/DetectionResult.msg` (srv·action은 합의 후 추가) |
+| `project_interfaces` | 5번 | `msg/DetectionResult.msg`, `srv/InspectBasket.srv`, `action/LoadBalls.action`, `action/SortBasket.action` |
 | `vision_inspection` | 1·2번 | `vision_node.py`(ROS2 노드), `inspection_logic.py`, `analysis.py`, `models.py`, `training.py`, `train.py`, `detect.py`, `config/data.yaml` |
 | `omx1_loading` | 3번 | `loading_node.py`(ROS2 노드), `coordinate_transform.py`, `camera_calibration.py`, `pick_ball.py`, `imitation_control.py`, `teaching.py`, `teaching_window.py`, CLI 2개 |
 | `omx2_sorting` | 4번 | `move_basket.py`, `pass_motion.py`, `reject_motion.py` (뼈대) |
 | `system_coordinator` | 5번 | `main_controller.py`, `state_machine.py`, `communication.py` |
 | `system_monitor` | 5번 | 통합 운영 GUI(`ui/`) |
-| `common/` (루트) | 5번 | `constants.py`, `messages.py`, `logger.py`, `camera.py`, `serial_ports.py`, `omx_controller.py`, `bootstrap.py` |
+| `common` | 5번 | `constants.py`, `messages.py`, `logger.py`, `camera.py`, `serial_ports.py`, `omx_controller.py`, `bootstrap.py` |
 
 `vision_inspection` 안에서 1번(모델 학습·데이터셋)과 2번(카메라·검사 서비스)이
 파일 단위로 나뉜다. 학습 쪽은 `train.py`·`training.py`·`models.py`, 검사 쪽은
@@ -57,14 +58,27 @@ ROS2 인터페이스로만 데이터를 주고받는다.
 | `system_coordinator` | — | 노드 미작성 (`main_controller.py`가 흐름 로직만 담당) |
 | `system_monitor` | — | 노드 미작성 (GUI만 존재) |
 
+`InspectBasket`·`LoadBalls`·`SortBasket`은 정의만 있고 **서버가 없다.** 어느
+노드가 무엇을 구현해야 하는지는 `docs/communication_protocol.md`에 있다.
+
 노드가 없는 패키지에는 `package.xml`을 두지 않았다. 노드를 만들 때
 `package.xml`·`setup.py`·`setup.cfg`·`resource/`를 추가하면 colcon 빌드 대상이
-된다.
+된다. 지금 colcon 빌드 대상은 `common`, `project_interfaces`,
+`vision_inspection`, `omx1_loading` 네 개다.
 
 ## 지켜야 할 방향
 
 - 노드끼리 파이썬 import로 엮지 않는다. 노드 간 연결은 ROS2 인터페이스로만 한다.
   같은 패키지 안의 모듈끼리는 자유롭게 import한다.
+- **예외는 `system_monitor` 하나다.** 운영 GUI는 노드가 아니라 애플리케이션
+  계층이고, ROS2가 없는 개발 PC에서도 그대로 떠야 한다는 요구가 있어
+  `vision_inspection`과 `omx1_loading`을 직접 부른다. 방향은 언제나
+  GUI → 노드 패키지 한쪽이며, **노드 패키지가 `system_monitor`를 import하면
+  안 된다.** 그렇게 하면 colcon 설치본에서 GUI 패키지를 찾지 못해 깨진다.
+  글꼴처럼 GUI가 이미 해 둔 설정이 필요하면 결과만 읽는다
+  (`teaching_window.current_ui_font_family()` 참고).
+- 지금 패키지 의존은 `main.py → system_monitor → {vision_inspection,
+  omx1_loading} → common` 한 방향뿐이다. 순환이 생기면 되돌린다.
 - 값이 패키지 경계를 넘으면 `common/messages.py`의 dataclass 규격을 쓴다.
   ROS2 메시지로 나갈 때는 `to_dict()`로 바꾼다.
 - 상태 문자열은 각자 적지 않고 `common/constants.py`의 `RobotState`를 쓴다.
@@ -81,7 +95,13 @@ ROS2 인터페이스로만 데이터를 주고받는다.
 - import 경로: ROS2 패키지는 `pkg/pkg/*.py` 구조라 바깥쪽 패키지 폴더가 import
   경로다. `common/bootstrap.py`의 `ensure_workspace_path()`가 `main.py` 실행
   시점에 이 경로들을 등록하고, 테스트는 `pyproject.toml`의 `pythonpath`가
-  담당한다.
+  담당한다. `common`도 같은 구조의 패키지라 `main.py`는 그 함수를 부르기 전에
+  `ros2_ws/src/common`만 직접 한 번 올린다.
+- 저장소 루트 경로: `object/`·`result/`·`models/`를 가리키는 `PROJECT_DIR`은
+  `__file__`에서 고정 단계 수로 올라가지 않는다. colcon이 `common`을
+  `install/`로 복사하면 단계 수가 달라지기 때문이다. `main.py`와 `ros2_ws`가
+  함께 있는 폴더를 찾아 올라가고, 소스 트리 밖에서 실행할 때는
+  `SMART_FACTORY_PROJECT_DIR` 환경변수로 알려 준다.
 - 시리얼 포트: 이름 규칙이 `/dev/ttyACM0`과 `COMx`로 달라, 연결된 포트를
   조회해 USB 장치를 고른다. 조회 결과가 없을 때만 OS별 기본값을 쓰고,
   GUI 입력칸과 `--port` 옵션으로 언제든 직접 지정할 수 있다.
@@ -104,13 +124,15 @@ ROS2 인터페이스로만 데이터를 주고받는다.
 
 `python -m ...` 형태는 패키지 경로가 등록되어 있어야 한다. 한 번
 `pip install -e .`를 실행하거나 `PYTHONPATH`에 `ros2_ws/src/<패키지>`를 넣는다.
+`common`도 `ros2_ws/src/common` 아래에 있으므로 함께 넣는다.
 
 ## 통합 순서
 
 각자 자기 패키지만 두 달 개발한 뒤 마지막에 합치면 거의 반드시 실패한다.
 장비가 없어도 흐름은 먼저 연결할 수 있다.
 
-1. 인터페이스 확정 → `project_interfaces`와 `common/messages.py`
+1. ~~인터페이스 확정~~ → `project_interfaces`에 msg·srv·action 4종 정의 완료.
+   다음은 각 패키지에 **서버를 붙이는 일**이다.
 2. 가짜 데이터로 흐름 연결 → `python -m system_coordinator.main_controller`
 3. YOLO 검사 결과 연결 → `vision_inspection/inspection_logic.py`
 4. 첫 번째 OMX 연결 → `omx1_loading`

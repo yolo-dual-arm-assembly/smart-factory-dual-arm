@@ -16,12 +16,13 @@ from typing import Optional
 
 # OMX 패널이 이 파일을 별도 프로세스로 띄우고, VS Code의 "Run Python File"로도
 # 직접 실행한다. 그때 sys.path에는 이 파일이 있는 ui 디렉터리만 들어가므로,
-# 패키지 루트(system_monitor)와 레포 루트(common)를 직접 추가해
+# 패키지 루트(system_monitor)와 common 패키지 루트를 직접 추가해
 # 모듈 실행(`python -m system_monitor.ui.omx_manual_control`)과 같게 만든다.
 if __package__ in (None, ""):
     _here = Path(__file__).resolve()
-    sys.path.insert(0, str(_here.parents[2]))  # ros2_ws/src/system_monitor
-    sys.path.insert(0, str(_here.parents[5]))  # 레포 루트 (common/)
+    _workspace_src = _here.parents[3]  # ros2_ws/src
+    sys.path.insert(0, str(_workspace_src / "system_monitor"))
+    sys.path.insert(0, str(_workspace_src / "common"))
 
 from common.omx_controller import (
     HOME_MOVE_DURATION,
@@ -53,6 +54,8 @@ class OmxGuiApp(tk.Tk):
         self.is_connected = False
         self._updating_home_ui = False
         self._home_in_progress = False
+        # 홈 복귀가 끝나기를 기다리는 중인 종료 요청. _finish_home_move가 마무리한다.
+        self._closing = False
         self._disabled_widget_states: list[tuple[tk.Widget, str]] = []
 
         self.joint_entries: list[ttk.Entry] = []
@@ -364,6 +367,11 @@ class OmxGuiApp(tk.Tk):
         self._set_controls_enabled(True)
         if error is not None:
             messagebox.showerror("홈 이동 오류", f"홈 포즈 이동 실패:\n{error}")
+        if self._closing:
+            # 홈 복귀를 기다리려고 미뤄 둔 종료를 이제 마무리한다.
+            self._closing = False
+            self._disconnect_robot()
+            self.destroy()
 
     def _open_gripper(self) -> None:
         self.gripper_var.set(0)
@@ -388,7 +396,15 @@ class OmxGuiApp(tk.Tk):
                 "홈 포즈 이동이 끝난 뒤 창을 닫아 주세요.",
             )
             return
-        self._disconnect_robot()
+        # disconnect()는 전 관절 토크를 끊는다. 팔이 뻗은 자세에서 그대로
+        # 끊으면 중력으로 떨어지므로 홈 자세로 접은 뒤에 끊는다.
+        if self.is_connected and self.controller:
+            self._closing = True
+            self.lbl_status.config(
+                text="상태: 홈 복귀 후 종료 중...", foreground="blue"
+            )
+            self._go_home()
+            return
         self.destroy()
 
 

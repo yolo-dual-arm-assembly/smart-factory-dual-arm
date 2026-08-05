@@ -1,18 +1,14 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>vision_inspection</name>
+  <name>common</name>
   <version>0.1.0</version>
-  <description>YOLO 검사 노드와 학습·추론 도구</description>
+  <description>전 패키지가 공유하는 상수·메시지 규격·장치 접근 코드</description>
   <maintainer email="jinwoong0728@gmail.com">BKD</maintainer>
   <license>MIT</license>
 
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>project_interfaces</exec_depend>
-  <exec_depend>common</exec_depend>
+  <!-- ROS2 노드가 아니라 순수 파이썬 공용 코드다. rclpy에 의존하지 않으므로
+       ROS2가 없는 개발 PC에서도 그대로 import된다. -->
   <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_flake8</test_depend>

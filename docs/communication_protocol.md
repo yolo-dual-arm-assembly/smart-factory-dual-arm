@@ -1,9 +1,11 @@
 # 모듈 간 통신 규격
 
 담당 폴더가 나뉘어도 주고받는 값의 모양은 하나여야 합니다. 이 문서가 규격의
-설명이고, 실행 가능한 정의는 [`common/messages.py`](../common/messages.py)와
-[`common/constants.py`](../common/constants.py)에 있습니다. **문서와 코드가
-어긋나면 코드가 기준입니다.** 규격을 바꿀 때는 두 곳을 같은 PR에서 고칩니다.
+설명이고, 실행 가능한 정의는
+[`common/messages.py`](../ros2_ws/src/common/common/messages.py)와
+[`common/constants.py`](../ros2_ws/src/common/common/constants.py)에 있습니다.
+**문서와 코드가 어긋나면 코드가 기준입니다.** 규격을 바꿀 때는 두 곳을 같은
+PR에서 고칩니다.
 
 ## 왜 dict가 아니라 dataclass인가
 
@@ -29,6 +31,16 @@ result.to_dict()   # {"total_count": 3, "defect_count": 0, "result": "PASS"}
 
 판정 기준은 `InspectionResult.from_counts()` 한 곳에만 둡니다. 담당자별로
 `if defect_count > 0` 같은 조건을 각자 적으면 기준이 갈라집니다.
+
+`InspectBasket.srv`의 `normal_count`·`passed`도 각자 계산하지 말고 파생 속성을
+그대로 씁니다.
+
+```python
+response.total_count  = result.total_count
+response.normal_count = result.normal_count   # total - defect
+response.defect_count = result.defect_count
+response.passed       = result.is_pass
+```
 
 ## 좌표 변환 결과 — 3번(보정) → 4·5번(로봇)
 
@@ -72,57 +84,52 @@ IDLE → LOADING → LOADING_COMPLETE → INSPECTING → PASS/REJECT → MOVING 
 
 ### 지금 있는 것
 
-| 인터페이스 | 방식 | 위치 |
+인터페이스 4종이 모두 정의되어 있습니다. 파일이 규격의 기준이고, 이 표는
+어디에 무엇이 있는지만 알려 줍니다.
+
+| 인터페이스 | 방식 | 이름 | 위치 |
+|---|---|---|---|
+| `DetectionResult` | Topic | `/yolo/detection` | `project_interfaces/msg/DetectionResult.msg` |
+| `InspectBasket` | Service | `/vision/inspect_basket` | `project_interfaces/srv/InspectBasket.srv` |
+| `LoadBalls` | Action | `/omx1/load_balls` | `project_interfaces/action/LoadBalls.action` |
+| `SortBasket` | Action | `/omx2/sort_basket` | `project_interfaces/action/SortBasket.action` |
+
+`state` 문자열은 `common.constants.RobotState` 값을 그대로 씁니다.
+
+### 아직 만들지 않은 것 — 서버 구현
+
+인터페이스 **정의**는 있지만 이 서비스·액션을 실제로 제공하는 노드는 아직
+없습니다. 현재 rclpy 노드는 `vision_node`(토픽 발행)와
+`loading_node`(토픽 구독)뿐이고, 둘 다 위 서비스·액션을 쓰지 않습니다.
+
+| 인터페이스 | 서버를 만들 곳 | 담당 |
 |---|---|---|
-| `DetectionResult` | Topic (`/yolo/detection`) | `project_interfaces/msg/DetectionResult.msg` |
+| `InspectBasket` | `vision_inspection` — 집계는 `inspection_logic.count_detections()` 재사용 | 2번 |
+| `LoadBalls` | `omx1_loading` — 동작은 `pick_ball.py` 재사용 | 3번 |
+| `SortBasket` | `omx2_sorting` — 노드부터 만들어야 함 | 5번 |
 
-### 합의 후 추가할 것
-
-아직 파일로 만들지 않았습니다. 팀이 규격에 합의하면
-`project_interfaces/srv`, `project_interfaces/action`에 아래 초안대로
-추가합니다.
-
-```text
-# srv/InspectBasket.srv — 검사 요청(Service)
-int32 target_count
----
-int32 total_count
-int32 normal_count
-int32 defect_count
-bool passed
-string message
-```
-
-```text
-# action/LoadBalls.action — OMX 1 공 투입(Action)
-int32 target_count
----
-bool success
-int32 loaded_count
-string message
----
-int32 current_count
-string state
-```
-
-```text
-# action/SortBasket.action — OMX 2 이송(Action)
-string destination      # NORMAL 또는 REJECT
----
-bool success
-string message
----
-string state
-```
-
-`state` 문자열은 `common.constants.RobotState` 값을 그대로 씁니다. 인터페이스가
-생기면 각자 상대 코드 없이도 개발할 수 있습니다.
+정의가 생겼으므로 각자 상대 코드 없이도 개발할 수 있습니다. 상대편이 없으면
+CLI로 먼저 시험합니다.
 
 ```bash
 # OMX 2 담당자: YOLO 없이 이송 동작만 시험
 ros2 action send_goal /omx2/sort_basket \
   project_interfaces/action/SortBasket "{destination: 'NORMAL'}"
 ```
+
+### `/yolo/detection`과 `InspectBasket`은 다른 일을 한다
+
+두 경로를 같은 것으로 착각하기 쉬우니 구분해 둡니다.
+
+| | `/yolo/detection` (Topic) | `InspectBasket` (Service) |
+|---|---|---|
+| 언제 | 매 프레임 계속 | 요청할 때 한 번 |
+| 무엇을 | 최고 신뢰도 물체 **1개**의 bbox | 바구니 안 공 **전체 개수**와 불량 수 |
+| 쓰는 곳 | 팔이 물체를 실시간 추종 (`loading_node`) | 공정의 PASS/REJECT 판정 (coordinator) |
+
+토픽은 "지금 저기 뭐가 보인다"를, 서비스는 "이 바구니 합격인가"를 답합니다.
+토픽 결과를 세어서 검사 결과로 쓰면 안 됩니다 — 같은 공을 여러 프레임에서
+중복으로 세게 됩니다.
 
 ## 프로세스 안에서 쓰는 토픽 이름
 
@@ -143,7 +150,7 @@ ROS2를 붙이기 전에는
 
 담당자 코드가 완성되지 않아도 통합 흐름은 먼저 돌려볼 수 있습니다.
 
-```powershell
+```bash
 python -m system_coordinator.main_controller
 ```
 

@@ -8,6 +8,7 @@ PC에서는 ROS2 없이 통합 GUI(`python main.py`)와 테스트만 돌린다.
 
 ```text
 ros2_ws/src/
+├── common/               # 공용 상수·메시지·장치 코드 (ament_python, 노드 아님)
 ├── project_interfaces/   # 노드 간 메시지·서비스·액션 정의 (ament_cmake)
 ├── vision_inspection/    # YOLO 검사 (ament_python)   ← vision_node
 ├── omx1_loading/         # 적재 로봇 (ament_python)   ← loading_node
@@ -16,10 +17,16 @@ ros2_ws/src/
 └── system_monitor/       # 상태 표시·로그 (통합 GUI만 있음)
 ```
 
-빌드 대상은 지금 `project_interfaces`, `vision_inspection`, `omx1_loading`
-세 개다. 나머지 세 패키지는 아직 rclpy 노드가 없어 `package.xml`을 두지
-않았다. 노드를 만들 때 `package.xml`·`setup.py`·`setup.cfg`·`resource/`를
-추가하면 colcon 빌드 대상이 된다.
+빌드 대상은 지금 `common`, `project_interfaces`, `vision_inspection`,
+`omx1_loading` 네 개다. 나머지 세 패키지는 아직 rclpy 노드가 없어
+`package.xml`을 두지 않았다. 노드를 만들 때
+`package.xml`·`setup.py`·`setup.cfg`·`resource/`를 추가하면 colcon 빌드 대상이
+된다.
+
+`common`은 노드가 아니라 라이브러리 패키지다. rclpy에 의존하지 않으므로 ROS2가
+없는 개발 PC에서도 그대로 import되고, colcon 빌드 후에는 다른 노드가
+`<exec_depend>common</exec_depend>`로 참조한다. 폴더가 `common/common/*.py`
+구조라 import 경로는 예전과 똑같이 `from common.messages import ...`이다.
 
 ## 메시지: `project_interfaces/msg/DetectionResult`
 
@@ -34,10 +41,23 @@ ros2_ws/src/
 "메시지 자체가 안 옴"(탐지 노드 다운)을 구분할 수 있고, 후자는
 `loading_node`의 워치독이 잡아서 정지 명령을 낸다.
 
-검사 서비스(`InspectBasket.srv`)와 로봇 동작 액션(`LoadBalls.action`,
-`SortBasket.action`)은 아직 정의하지 않았다. 규격 초안은
-[`../docs/communication_protocol.md`](../docs/communication_protocol.md)에 있고,
-팀이 합의한 뒤 `project_interfaces/srv`, `project_interfaces/action`에 추가한다.
+## 서비스·액션
+
+검사 서비스(`srv/InspectBasket.srv`)와 로봇 동작 액션
+(`action/LoadBalls.action`, `action/SortBasket.action`)이 정의되어 있다.
+필드 설명은
+[`../docs/communication_protocol.md`](../docs/communication_protocol.md)에 있다.
+
+**정의만 있고 서버는 아직 없다.** 지금 도는 rclpy 노드는 `vision_node`와
+`loading_node`뿐이고 둘 다 토픽만 쓴다. 어느 패키지가 무엇을 구현해야 하는지는
+같은 문서의 "아직 만들지 않은 것 — 서버 구현" 표에 있다.
+
+빌드 후 정의가 잘 생성됐는지 확인한다.
+
+```bash
+ros2 interface list | grep project_interfaces
+ros2 interface show project_interfaces/srv/InspectBasket
+```
 
 ## 빌드 (Linux)
 
@@ -52,9 +72,16 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-노드가 레포 루트의 `common/` 패키지를 import한다면 실행 전에
-`PYTHONPATH`에 레포 루트를 추가한다(`export PYTHONPATH=$PYTHONPATH:$(pwd)/..`).
-공용 코드를 ament 패키지로 옮기는 것은 이후 정리 과제다.
+`common`도 워크스페이스의 ament 패키지라 `colcon build`가 함께 설치한다.
+예전에 필요했던 `PYTHONPATH` 수동 지정은 더 이상 하지 않는다.
+
+`object/`·`result/`·`models/` 경로를 쓰는 노드는 저장소 루트를 알아야 한다.
+`ros2 launch`를 저장소 루트에서 실행하면 자동으로 찾지만, 다른 곳에서
+실행한다면 환경변수로 알려 준다.
+
+```bash
+export SMART_FACTORY_PROJECT_DIR=/absolute/path/to/smart-factory-dual-arm
+```
 
 ## 실행
 

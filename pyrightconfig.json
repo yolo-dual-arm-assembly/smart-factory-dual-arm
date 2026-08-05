@@ -2,6 +2,7 @@
   "//": "ROS2 패키지는 pkg/pkg/*.py 구조라 편집기에도 import 경로를 알려 줘야 한다.",
   "extraPaths": [
     ".",
+    "ros2_ws/src/common",
     "ros2_ws/src/vision_inspection",
     "ros2_ws/src/omx1_loading",
     "ros2_ws/src/omx2_sorting",

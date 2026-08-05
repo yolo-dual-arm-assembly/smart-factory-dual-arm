@@ -5,6 +5,7 @@ import math
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import traceback
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -24,11 +25,24 @@ from common.omx_controller import (
     angle_to_dxl,
 )
 from omx1_loading.teaching import MIN_TEACHING_POINTS, OmxTeachingDataset
-from system_monitor.ui.ui_fonts import configure_korean_fonts
 
 
 TEACHING_PREVIEW_SIZE = (820, 620)
 TEACHING_POLL_MS = 30
+
+
+def current_ui_font_family(widget: tk.Misc) -> str:
+    """이 Tk 인터프리터의 기본 UI 글꼴 family를 읽는다.
+
+    이 창은 언제나 운영 GUI가 띄우는 ``Toplevel``이고, 한글 글꼴 설정은 그
+    루트 창이 이미 끝냈다. Tk의 named font는 인터프리터 단위라 여기서 다시
+    설정할 필요가 없다. 설정하려 들면 UI 패키지를 import해야 해서 로봇
+    패키지가 GUI 패키지에 의존하게 되므로, 결과만 읽어서 쓴다.
+    """
+    try:
+        return tkfont.nametofont("TkDefaultFont", root=widget).actual("family")
+    except tk.TclError:
+        return "TkDefaultFont"
 
 
 class OmxTeachingWindow(tk.Toplevel):
@@ -45,7 +59,7 @@ class OmxTeachingWindow(tk.Toplevel):
         on_closed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
-        self.ui_font_family, _ = configure_korean_fonts(self)
+        self.ui_font_family = current_ui_font_family(self)
         self.title("OMX Mouse 관절 교시")
         self.geometry("1420x820")
         self.minsize(1100, 700)
@@ -71,6 +85,8 @@ class OmxTeachingWindow(tk.Toplevel):
         self._photo: ImageTk.PhotoImage | None = None
         self._connected = False
         self._moving = False
+        # 홈 복귀가 끝나기를 기다리는 중인 종료 요청. _home_finished가 마무리한다.
+        self._closing = False
         self._updating_joint_ui = False
         self._slider_after_id: str | None = None
 
@@ -478,6 +494,10 @@ class OmxTeachingWindow(tk.Toplevel):
         else:
             messagebox.showerror("홈 이동 오류", str(error), parent=self)
         self._set_joint_controls(self._connected)
+        if self._closing:
+            # 홈 복귀를 기다리려고 미뤄 둔 종료를 이제 마무리한다. _closing을
+            # 켜 둔 채로 불러야 close()가 홈 복귀를 다시 시작하지 않는다.
+            self.close()
 
     def _save_teaching_point(self) -> None:
         with self._lock:
@@ -545,6 +565,13 @@ class OmxTeachingWindow(tk.Toplevel):
     def close(self) -> None:
         if self._moving:
             messagebox.showinfo("로봇 이동 중", "이동 완료 후 창을 닫아 주세요.")
+            return
+        # disconnect()는 전 관절 토크를 끊는다. 팔이 뻗은 자세에서 그대로
+        # 끊으면 중력으로 떨어지므로 홈 자세로 접은 뒤에 끊는다.
+        if self._connected and not self._closing:
+            self._closing = True
+            self.status_var.set("홈 복귀 후 종료 중...")
+            self._go_home()
             return
         self._stop_event.set()
         if self._camera_thread.is_alive():
