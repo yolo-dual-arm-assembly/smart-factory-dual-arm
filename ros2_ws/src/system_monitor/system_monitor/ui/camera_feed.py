@@ -47,7 +47,10 @@ class CameraSnapshot:
     video_fps: float = 0.0
     infer_fps: float = 0.0
     detection_count: int = 0
+    # 안정화 게이트를 통과한 **확정** 판정. 프레임마다 튀지 않는다.
     inspection: InspectionResult | None = None
+    # 개수가 아직 흔들리고 있어 다음 확정을 기다리는 중인가.
+    settling: bool = False
     message: str = ""
     released: bool = False
 
@@ -96,6 +99,10 @@ class CameraFeed:
         # 운영 중에만 쓰는 기준 개수 덮어쓰기. None이면 설정 파일 값을 그대로
         # 쓴다. 여기서만 들고 있으므로 프로그램을 끄면 설정 파일 값으로 돌아간다.
         self._target_count: int | None = None
+        # 추론 결과가 실제로 갱신된 횟수. 안정화 게이트가 "같은 추론을 다시 본
+        # 것"과 "새 추론"을 구분하는 데 쓴다.
+        self._result_seq = 0
+        self._stabilizer = None  # 첫 판정 때 만든다(vision_inspection 지연 import)
 
     # ------------------------------------------------------------------ 수명주기
 
@@ -132,6 +139,10 @@ class CameraFeed:
             self._preview = None
             self._raw_frame = None
             self._last_result = None
+            # 피드가 멈추면 이전 장면의 확정 판정도 의미가 없다. 다시 시작할 때
+            # 낡은 판정을 끌고 가지 않도록 게이트를 비운다.
+            if self._stabilizer is not None:
+                self._stabilizer.reset()
 
     # ------------------------------------------------------------------ 소유권 인계
 
@@ -258,6 +269,7 @@ class CameraFeed:
                 self._raw_frame = frame
                 self._raw_seq += 1
                 result = self._last_result
+                result_seq = self._result_seq
                 infer_fps = self._infer_fps
                 self._video_fps = fps
 
@@ -265,9 +277,9 @@ class CameraFeed:
                 # plot은 전달한 이미지에 직접 그리므로 원본은 복사해 보호한다.
                 annotated = result.plot(img=frame.copy())
                 count = 0 if result.boxes is None else len(result.boxes)
-                inspection = self._inspection_from(result)
+                inspection, settling = self._inspection_from(result, result_seq)
             else:
-                annotated, count, inspection = frame, 0, None
+                annotated, count, inspection, settling = frame, 0, None, False
 
             # 크기 조정은 화면에 그리는 VideoPanel이 패널 크기를 보고 한 번만
             # 한다. 여기서 미리 줄이면 두 번 스케일되어 화질만 나빠진다.
@@ -281,6 +293,7 @@ class CameraFeed:
                     infer_fps=infer_fps,
                     detection_count=count,
                     inspection=inspection,
+                    settling=settling,
                 )
 
     def _inference_worker(self) -> None:
@@ -320,17 +333,24 @@ class CameraFeed:
 
             with self._lock:
                 self._last_result = result
+                # 안정화 게이트가 "새 추론"과 "같은 추론의 재사용"을 구분하는 번호.
+                self._result_seq += 1
                 self._infer_fps = (
                     0.9 * self._infer_fps + 0.1 / elapsed
                     if self._infer_fps
                     else 1.0 / elapsed
                 )
 
-    def _inspection_from(self, result) -> InspectionResult | None:
-        """추론 결과를 검사 판정으로 바꾼다.
+    def _inspection_from(
+        self, result, result_seq: int
+    ) -> tuple[InspectionResult | None, bool]:
+        """추론 결과를 **안정화된** 검사 판정으로 바꾼다.
 
         PASS/REJECT 기준은 ``vision_inspection``에 하나만 있어야 하므로 여기서
-        조건을 새로 적지 않고 그 모듈을 그대로 부른다.
+        조건을 새로 적지 않고 그 모듈을 그대로 부른다. 프레임마다 나오는 순간
+        판정은 바구니가 흔들리는 동안 PASS/REJECT로 튀므로, 같은 패키지의
+        안정화 게이트(:mod:`vision_inspection.stability`)를 거쳐 개수가 잠잠해진
+        뒤의 **확정 판정**과 "아직 흔들리는 중" 여부를 돌려준다.
         """
         try:
             from vision_inspection.inspection_logic import (
@@ -338,12 +358,21 @@ class CameraFeed:
                 count_detections,
                 detected_class_names,
             )
+            from vision_inspection.stability import VerdictStabilizer
 
             with self._lock:
                 override = self._target_count
             # 덮어쓴 값이 없으면 UNSET을 넘겨 설정 파일 값을 쓰게 한다.
             # None을 넘기면 '개수 검사 끄기'라는 다른 뜻이 된다.
             target = UNSET if override is None else override
-            return count_detections(detected_class_names(result), target_count=target)
+            raw = count_detections(detected_class_names(result), target_count=target)
+
+            with self._lock:
+                if self._stabilizer is None:
+                    self._stabilizer = VerdictStabilizer()
+                verdict = self._stabilizer.update(
+                    raw, sample_id=result_seq, now=time.perf_counter()
+                )
+            return verdict.confirmed, verdict.settling
         except Exception:
-            return None
+            return None, False
