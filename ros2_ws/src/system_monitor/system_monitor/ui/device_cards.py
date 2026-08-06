@@ -116,24 +116,6 @@ class ArmStatusCard(ttk.LabelFrame):
             )
 
 
-class UnavailableArmCard(ArmStatusCard):
-    """아직 노드가 없는 팔에 쓰는 카드.
-
-    ``omx2_sorting``은 동작이 전부 미구현이라 공정 상태를 만들어 낼 수 없다.
-    연결과 관절각까지는 진짜 값을 보여 주되, 공정 상태는 지어내지 않는다.
-    """
-
-    def __init__(self, master: tk.Misc, title: str, *, note: str) -> None:
-        super().__init__(master, title, description=note)
-        self._note = note
-
-    def update_from(self, snapshot: ArmSnapshot) -> None:
-        super().update_from(snapshot)
-        if snapshot.connected:
-            # 연결은 됐지만 공정 로직이 없으므로 상태를 IDLE로 단정하지 않는다.
-            self.status_var.set("연결됨 · 공정 로직 미구현")
-
-
 class CameraStatusCard(ttk.LabelFrame):
     """카메라 한 대의 연결·장치·FPS를 보여 준다."""
 
