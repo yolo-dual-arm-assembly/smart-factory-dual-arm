@@ -92,41 +92,73 @@ def drive_runs_dir(
     return drive_dir("runs", subdir=subdir, mount_point=mount_point)
 
 
+def archive_root(archive: Path) -> str | None:
+    """압축 안의 최상위 폴더 이름. 판별할 수 없으면 None.
+
+    첫 항목만 읽는다. 0.5GB짜리 tar.gz의 전체 목록을 훑으면 느리기 때문이다.
+    """
+    archive = Path(archive)
+    if archive.name.lower().endswith(".zip"):
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            first = names[0] if names else ""
+    else:
+        with tarfile.open(archive) as bundle:
+            member = bundle.next()
+            first = member.name if member is not None else ""
+    root = first.strip("/").split("/")[0]
+    return root or None
+
+
 def extract_dataset(archive: Path, destination: Path, *, force: bool = False) -> Path:
     """Drive에 올려 둔 데이터셋 압축을 로컬 디스크로 푼다.
 
-    ``destination``이 이미 차 있으면 건너뛴다. 같은 셀을 다시 실행해도 4GB를 다시
-    풀지 않게 하려는 것이다. 다시 풀려면 ``force=True``.
+    ``destination``은 압축을 풀어 넣을 **상위** 폴더다. 압축 안에 ``train_set/``이
+    들어 있고 ``destination``이 저장소 루트면 ``<저장소>/train_set/``이 된다.
+
+    이미 풀려 있으면 건너뛴다. 같은 셀을 다시 실행해도 수 GB를 다시 풀지 않게
+    하려는 것이다. 다시 풀려면 ``force=True``.
+
+    건너뛸지는 ``destination``이 아니라 **압축의 최상위 폴더**가 이미 채워져
+    있는지로 판단한다. ``destination``은 보통 git 클론처럼 원래 다른 파일이 들어
+    있는 곳이라, 그것만 보고 판단하면 압축을 영영 풀지 않는다.
     """
     archive = Path(archive)
     destination = Path(destination)
     if not archive.is_file():
-        raise FileNotFoundError(f"압축 파일이 없습니다: {archive}")
-
-    if destination.is_dir() and any(destination.iterdir()):
-        if not force:
-            print(f"[colab] {destination}에 이미 데이터가 있어 건너뜁니다.")
-            return destination
-        shutil.rmtree(destination)
-
-    destination.mkdir(parents=True, exist_ok=True)
+        raise FileNotFoundError(
+            f"압축 파일이 없습니다: {archive}\n"
+            "Google Drive의 해당 폴더에 파일을 올렸는지 확인하세요."
+        )
     name = archive.name.lower()
-    started = time.perf_counter()
-    if name.endswith(".zip"):
-        with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(destination)
-    elif name.endswith(ARCHIVE_SUFFIXES):
-        with tarfile.open(archive) as bundle:
-            # 파이썬 3.12부터 filter 인자가 없으면 경고가 뜬다. 신뢰하는 내 파일이라
-            # data 필터로 충분하다(절대경로·상위경로 탈출을 막아 준다).
-            bundle.extractall(destination, filter="data")
-    else:
+    if not name.endswith(ARCHIVE_SUFFIXES):
         raise ValueError(
             f"지원하지 않는 압축 형식입니다: {archive.name} "
             f"({', '.join(ARCHIVE_SUFFIXES)} 중 하나여야 합니다)"
         )
 
+    root = archive_root(archive)
+    target = destination / root if root else destination
+
+    if target.is_dir() and any(target.iterdir()):
+        if not force:
+            count = sum(1 for path in target.rglob("*") if path.is_file())
+            print(f"[colab] {target}에 파일 {count}개가 이미 있어 건너뜁니다.")
+            return target
+        shutil.rmtree(target)
+
+    destination.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(destination)
+    else:
+        with tarfile.open(archive) as bundle:
+            # 파이썬 3.12부터 filter 인자가 없으면 경고가 뜬다. 신뢰하는 내 파일이라
+            # data 필터로 충분하다(절대경로·상위경로 탈출을 막아 준다).
+            bundle.extractall(destination, filter="data")
+
     elapsed = time.perf_counter() - started
-    count = sum(1 for _ in destination.rglob("*") if _.is_file())
-    print(f"[colab] {destination}에 파일 {count}개 해제 ({elapsed:.0f}초)")
-    return destination
+    count = sum(1 for path in target.rglob("*") if path.is_file())
+    print(f"[colab] {target}에 파일 {count}개 해제 ({elapsed:.0f}초)")
+    return target
