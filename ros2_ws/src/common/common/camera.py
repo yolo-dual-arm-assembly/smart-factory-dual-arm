@@ -66,15 +66,32 @@ def open_camera(
     return capture
 
 
+def _camera_group_key(node: Path, name: str) -> str:
+    """같은 물리 카메라가 만든 노드들을 묶는 키.
+
+    ``videoN/device``는 그 노드를 만든 USB 인터페이스를 가리키는 심링크다.
+    한 카메라의 캡처·메타데이터 노드는 같은 곳을 가리키므로 이걸로 묶으면
+    **같은 모델 여러 대**(C270 두 대처럼 이름이 똑같은 경우)도 따로 남는다.
+    이름으로 묶으면 두 번째 카메라까지 한 대로 합쳐져 버린다.
+
+    심링크가 없거나 읽지 못하면(가상 장치, 테스트 디렉터리) 이름으로 묶던
+    예전 방식으로 물러난다.
+    """
+    try:
+        return str((node / "device").resolve(strict=True))
+    except OSError:
+        return f"name:{name}"
+
+
 def linux_camera_devices(
     sys_dir: Path = LINUX_V4L_SYS_DIR,
 ) -> tuple[CameraDevice, ...]:
     """리눅스 video 노드에서 USB 외장 카메라를 앞세운 장치 목록을 만든다.
 
-    한 카메라가 video0·video1처럼 노드를 여러 개 만드는 일이 흔하므로 이름이
-    같으면 가장 낮은(캡처용) 노드 하나만 남긴다.
+    한 카메라가 video0·video1처럼 노드를 여러 개 만드는 일이 흔하므로 같은
+    물리 장치의 노드는 가장 낮은(캡처용) 것 하나만 남긴다.
     """
-    entries: list[tuple[int, str]] = []
+    entries: list[tuple[int, str, str]] = []
     for node in sys_dir.glob("video*"):
         suffix = node.name.removeprefix("video")
         if not suffix.isdigit():
@@ -83,15 +100,15 @@ def linux_camera_devices(
             name = (node / "name").read_text(encoding="utf-8").strip()
         except OSError:
             continue
-        entries.append((int(suffix), name))
+        entries.append((int(suffix), name, _camera_group_key(node, name)))
 
-    capture_index_by_name: dict[str, int] = {}
-    for index, name in sorted(entries):
-        capture_index_by_name.setdefault(name, index)
+    capture_by_group: dict[str, tuple[int, str]] = {}
+    for index, name, group in sorted(entries):
+        capture_by_group.setdefault(group, (index, name))
 
     devices = [
         CameraDevice(index, name)
-        for name, index in capture_index_by_name.items()
+        for index, name in capture_by_group.values()
     ]
     devices.sort(
         key=lambda device: (
