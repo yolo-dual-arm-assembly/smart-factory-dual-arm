@@ -532,8 +532,9 @@ class OperatorDashboard(tk.Tk):
             self.arm_cards[role_key].update_from(monitor.snapshot())
         for role_key, feed in self.cameras.items():
             self.camera_cards[role_key].update_from(feed.snapshot())
+        inspection_snapshot = self.cameras[CAM_INSPECTION].snapshot()
         self.result_bar.update_from(
-            self.cameras[CAM_INSPECTION].snapshot().inspection
+            inspection_snapshot.inspection, settling=inspection_snapshot.settling
         )
         self.after(CARD_POLL_MS, self._poll_cards)
 
