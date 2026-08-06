@@ -33,7 +33,6 @@ from system_monitor.ui.device_cards import (
     ArmStatusCard,
     CameraStatusCard,
     InspectionResultBar,
-    UnavailableArmCard,
     VideoPanel,
 )
 from system_monitor.ui.device_roles import (
@@ -45,6 +44,11 @@ from system_monitor.ui.device_roles import (
     omx_assignment_status,
 )
 from system_monitor.ui.omx_panel import OmxPanel
+from system_monitor.ui.sorting_panel import (
+    TOOL_MOTION as SORTING_MOTION,
+    TOOL_TEACHING as SORTING_TEACHING,
+    SortingPanel,
+)
 
 CONSOLE_POLL_MS = 100
 # 카메라 프레임 갱신 주기. 캡처(~30fps)와 어긋나며 프레임을 흘리지 않도록 절반으로 돈다.
@@ -77,13 +81,13 @@ DEFAULT_TARGET_COUNT = 1
 # 모두 이 표를 쓴다.
 TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # 도구 이름: (놓아야 할 팔, 놓아야 할 카메라)
-    "calibration": ((), (CAM_IMITATION,)),
-    "teaching": ((ARM_LOADING,), (CAM_IMITATION,)),
-    "mouse_approach": ((ARM_LOADING,), (CAM_IMITATION,)),
     "manual_control": ((ARM_LOADING,), ()),
     # 개발 도구는 자체 카메라 선택기로 아무 카메라나 열 수 있고, 수동 제어까지
     # 띄운다. 어느 것을 고를지 미리 알 수 없으므로 캠 두 대를 모두 내준다.
     "dev_console": ((ARM_LOADING,), (CAM_IMITATION, CAM_INSPECTION)),
+    # 분류(OMX 2) 도구는 분류 팔만 쓴다. 카메라는 건드리지 않는다.
+    SORTING_MOTION: ((ARM_SORTING,), ()),
+    SORTING_TEACHING: ((ARM_SORTING,), ()),
 }
 
 
@@ -195,9 +199,9 @@ class OperatorDashboard(tk.Tk):
             ARM_LOADING: ArmStatusCard(
                 row, loading_role.title, description=loading_role.description
             ),
-            # omx2_sorting은 동작이 전부 미구현이라 공정 상태를 만들어 낼 수 없다.
-            ARM_SORTING: UnavailableArmCard(
-                row, sorting_role.title, note="omx2_sorting 노드 미작성"
+            # PASS/REJECT 웨이포인트 동작이 들어와 분류 팔도 일반 카드로 승격했다.
+            ARM_SORTING: ArmStatusCard(
+                row, sorting_role.title, description=sorting_role.description
             ),
         }
         self.camera_cards = {
@@ -253,16 +257,14 @@ class OperatorDashboard(tk.Tk):
         bottom = ttk.Frame(self, padding=(10, 8, 10, 10))
         bottom.grid(row=3, column=0, sticky="nsew")
         # 도구를 세로로 쌓으면 이 행이 창의 절반을 먹어 영상이 눌린다.
-        # OMX 도구 · 카메라 배정 · 콘솔을 가로로 나란히 둔다.
-        bottom.columnconfigure(2, weight=1)
+        # OMX1 도구 · OMX2 분류 · 카메라 배정 · 콘솔을 가로로 나란히 둔다.
+        bottom.columnconfigure(3, weight=1)
 
         tools = ttk.Frame(bottom)
         tools.grid(row=0, column=0, sticky="nw", padx=(0, 10))
 
         self.omx_panel = OmxPanel(
             tools,
-            camera_busy_reason=self._camera_busy_reason,
-            camera_index=lambda: self.cameras[CAM_IMITATION].index or 0,
             omx_port=lambda: self.arms[ARM_LOADING].port,
             on_tool_start=self.release_devices,
             on_tool_end=self.acquire_devices,
@@ -274,10 +276,23 @@ class OperatorDashboard(tk.Tk):
         )
         self.dev_button.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
+        self.sorting_panel = SortingPanel(
+            bottom,
+            omx_port=lambda: self.arms[ARM_SORTING].port,
+            on_tool_start=self.release_devices,
+            on_tool_end=self.acquire_devices,
+        )
+        self.sorting_panel.grid(row=0, column=1, sticky="nw", padx=(0, 10))
+
+        self.swap_arm_button = ttk.Button(
+            tools, text="OMX 1↔2 포트 바꾸기", command=self.swap_arm_roles
+        )
+        self.swap_arm_button.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
         # 자동 배정은 장치 열거 순서를 따를 뿐이라 두 캠이 반대로 잡히거나 한
         # 대만 잡히는 일이 흔하다. 사람이 직접 고칠 수단을 함께 둔다.
         camera_tools = ttk.LabelFrame(bottom, text="카메라 배정", padding=8)
-        camera_tools.grid(row=0, column=1, sticky="nw", padx=(0, 10))
+        camera_tools.grid(row=0, column=2, sticky="nw", padx=(0, 10))
         camera_tools.columnconfigure(1, weight=1)
 
         self.camera_choice_vars: dict[str, tk.StringVar] = {}
@@ -325,7 +340,7 @@ class OperatorDashboard(tk.Tk):
             height=CONSOLE_HEIGHT_LINES,
             width=CONSOLE_WIDTH_CHARS,
         )
-        self.console.grid(row=0, column=2, sticky="nsew")
+        self.console.grid(row=0, column=3, sticky="nsew")
 
     # ------------------------------------------------------------------ 카메라 배정
 
@@ -400,6 +415,42 @@ class OperatorDashboard(tk.Tk):
             feed.stop()
         self._scan_and_start_cameras()
 
+    def swap_arm_roles(self) -> None:
+        """OMX 1(적재)·OMX 2(분류)의 포트 배정을 맞바꾼다.
+
+        자동 배정은 포트 열거 순서를 따를 뿐이라 부팅에 따라 두 팔이 반대로
+        잡힐 수 있다. 어느 보드가 어느 팔인지는 실물을 봐야 알 수 있으므로
+        사람이 바꾸게 한다. 보드가 하나뿐일 때 분류 팔을 시험하고 싶으면 그
+        포트를 OMX 2로 넘기는 용도로도 쓴다.
+        """
+        loading = self.arms[ARM_LOADING]
+        sorting = self.arms[ARM_SORTING]
+        if loading.is_released or sorting.is_released:
+            messagebox.showwarning(
+                "로봇팔 사용 중",
+                "실행 중인 도구(교시·분류 동작 등)를 먼저 종료한 뒤 바꾸세요.",
+                parent=self,
+            )
+            return
+        loading_port, sorting_port = loading.port, sorting.port
+        if loading_port is None and sorting_port is None:
+            messagebox.showinfo("포트 없음", "바꿀 포트가 없습니다.", parent=self)
+            return
+
+        # 서로의 포트를 바로 배정하면 상대 감시자가 아직 그 포트를 쥐고 있어
+        # 연결이 충돌한다. 카메라 교체와 같은 이유로 둘 다 비운 뒤 바꾼다.
+        loading.set_port(None)
+        sorting.set_port(None)
+        loading.set_port(sorting_port)
+        sorting.set_port(loading_port)
+
+        self.omx_panel.refresh_port()
+        self.sorting_panel.refresh_port()
+        print(
+            f"[dashboard] OMX 포트 교체 · OMX 1={sorting_port or '없음'} · "
+            f"OMX 2={loading_port or '없음'}"
+        )
+
     def swap_camera_roles(self) -> None:
         """모방학습 캠과 검수 캠을 맞바꾼다.
 
@@ -460,12 +511,6 @@ class OperatorDashboard(tk.Tk):
             self.cameras[key].acquire()
         if arm_keys or camera_keys:
             print(f"[dashboard] {tool}에서 장치 회수")
-
-    def _camera_busy_reason(self) -> str | None:
-        """모방학습 캠을 도구가 쓸 수 없는 이유. 쓸 수 있으면 None."""
-        if self.cameras[CAM_IMITATION].index is None:
-            return "모방학습 캠이 배정되지 않았습니다. 카메라 연결을 확인하세요."
-        return None
 
     # ------------------------------------------------------------------ 개발 도구
 
@@ -532,8 +577,9 @@ class OperatorDashboard(tk.Tk):
             self.arm_cards[role_key].update_from(monitor.snapshot())
         for role_key, feed in self.cameras.items():
             self.camera_cards[role_key].update_from(feed.snapshot())
+        inspection_snapshot = self.cameras[CAM_INSPECTION].snapshot()
         self.result_bar.update_from(
-            self.cameras[CAM_INSPECTION].snapshot().inspection
+            inspection_snapshot.inspection, settling=inspection_snapshot.settling
         )
         self.after(CARD_POLL_MS, self._poll_cards)
 
@@ -549,6 +595,8 @@ class OperatorDashboard(tk.Tk):
             messagebox.showinfo(
                 "개발 도구 실행 중", "개발 도구 창을 먼저 닫아 주세요.", parent=self
             )
+            return
+        if not self.sorting_panel.request_close():
             return
         if not self.omx_panel.request_close(self._finish_close):
             return

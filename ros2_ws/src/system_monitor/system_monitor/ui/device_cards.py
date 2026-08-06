@@ -116,24 +116,6 @@ class ArmStatusCard(ttk.LabelFrame):
             )
 
 
-class UnavailableArmCard(ArmStatusCard):
-    """아직 노드가 없는 팔에 쓰는 카드.
-
-    ``omx2_sorting``은 동작이 전부 미구현이라 공정 상태를 만들어 낼 수 없다.
-    연결과 관절각까지는 진짜 값을 보여 주되, 공정 상태는 지어내지 않는다.
-    """
-
-    def __init__(self, master: tk.Misc, title: str, *, note: str) -> None:
-        super().__init__(master, title, description=note)
-        self._note = note
-
-    def update_from(self, snapshot: ArmSnapshot) -> None:
-        super().update_from(snapshot)
-        if snapshot.connected:
-            # 연결은 됐지만 공정 로직이 없으므로 상태를 IDLE로 단정하지 않는다.
-            self.status_var.set("연결됨 · 공정 로직 미구현")
-
-
 class CameraStatusCard(ttk.LabelFrame):
     """카메라 한 대의 연결·장치·FPS를 보여 준다."""
 
@@ -288,7 +270,7 @@ class InspectionResultBar(ttk.Frame):
         # 기준 개수는 운영 중에만 바꾼다. 설정 파일에는 쓰지 않으므로 프로그램을
         # 다시 켜면 파일 값으로 돌아간다.
         target_box = ttk.Frame(self)
-        target_box.grid(row=0, column=2, sticky="e", padx=(10, 12))
+        target_box.grid(row=0, column=3, sticky="e", padx=(10, 12))
         ttk.Label(target_box, text="기준 개수").grid(row=0, column=0, sticky="e")
         self.target_var = tk.StringVar(value=str(target_count))
         self.target_spin = ttk.Spinbox(
@@ -305,9 +287,16 @@ class InspectionResultBar(ttk.Frame):
         self.target_spin.bind("<Return>", self._apply_target)
         self.target_spin.bind("<FocusOut>", self._apply_target)
 
+        # 바구니가 흔들려 개수가 확정되지 않은 동안 띄우는 표시. 확정 판정은
+        # 래치되어 그대로 남고, 이 라벨만 나타났다 사라진다.
+        self.settling_var = tk.StringVar(value="")
+        ttk.Label(
+            self, textvariable=self.settling_var, anchor="w", foreground=COLOR_WARN
+        ).grid(row=0, column=2, sticky="w")
+
         self.detail_var = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.detail_var, anchor="e").grid(
-            row=0, column=3, sticky="e"
+            row=0, column=4, sticky="e"
         )
 
     def _apply_target(self, _event: object = None) -> None:
@@ -325,7 +314,15 @@ class InspectionResultBar(ttk.Frame):
         self._applied_target = value
         self._on_target_change(value)
 
-    def update_from(self, result: InspectionResult | None) -> None:
+    def update_from(
+        self, result: InspectionResult | None, *, settling: bool = False
+    ) -> None:
+        """확정 판정과 안정화 상태를 화면에 반영한다.
+
+        ``result``는 안정화 게이트가 래치한 **확정** 판정이다. 흔들리는 동안에도
+        지워지지 않고, 대신 ``settling`` 표시가 옆에 나타난다.
+        """
+        self.settling_var.set("안정화 중…" if settling else "")
         if result is None:
             self.verdict_var.set("대기 중")
             self.verdict_label.configure(foreground=COLOR_IDLE)
