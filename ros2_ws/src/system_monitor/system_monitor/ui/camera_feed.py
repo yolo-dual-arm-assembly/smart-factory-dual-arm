@@ -93,6 +93,9 @@ class CameraFeed:
         self._infer_fps = 0.0
         self._released = False
         self._snapshot = CameraSnapshot(index=index, name=name)
+        # 운영 중에만 쓰는 기준 개수 덮어쓰기. None이면 설정 파일 값을 그대로
+        # 쓴다. 여기서만 들고 있으므로 프로그램을 끄면 설정 파일 값으로 돌아간다.
+        self._target_count: int | None = None
 
     # ------------------------------------------------------------------ 수명주기
 
@@ -170,6 +173,20 @@ class CameraFeed:
     @property
     def index(self) -> int | None:
         return self._index
+
+    def set_target_count(self, value: int | None) -> None:
+        """바구니에 있어야 할 공 개수를 운영 중에만 바꾼다.
+
+        설정 파일(``config/class_scheme.yaml``)은 건드리지 않는다. 프로그램을
+        끄면 이 값은 사라지고 다시 설정 파일 값으로 돌아간다.
+        """
+        with self._lock:
+            self._target_count = value
+
+    @property
+    def target_count(self) -> int | None:
+        with self._lock:
+            return self._target_count
 
     def set_device(self, index: int | None, name: str = "") -> None:
         """사용자가 카메라를 바꿨을 때. 피드를 다시 시작한다."""
@@ -309,8 +326,7 @@ class CameraFeed:
                     else 1.0 / elapsed
                 )
 
-    @staticmethod
-    def _inspection_from(result) -> InspectionResult | None:
+    def _inspection_from(self, result) -> InspectionResult | None:
         """추론 결과를 검사 판정으로 바꾼다.
 
         PASS/REJECT 기준은 ``vision_inspection``에 하나만 있어야 하므로 여기서
@@ -318,10 +334,16 @@ class CameraFeed:
         """
         try:
             from vision_inspection.inspection_logic import (
+                UNSET,
                 count_detections,
                 detected_class_names,
             )
 
-            return count_detections(detected_class_names(result))
+            with self._lock:
+                override = self._target_count
+            # 덮어쓴 값이 없으면 UNSET을 넘겨 설정 파일 값을 쓰게 한다.
+            # None을 넘기면 '개수 검사 끄기'라는 다른 뜻이 된다.
+            target = UNSET if override is None else override
+            return count_detections(detected_class_names(result), target_count=target)
         except Exception:
             return None
