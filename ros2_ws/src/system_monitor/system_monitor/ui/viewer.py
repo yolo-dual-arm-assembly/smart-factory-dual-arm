@@ -24,7 +24,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from common.camera import list_cameras, selectable_devices
-from common.constants import OMX_MODEL_PATH, PROJECT_DIR
+from common.constants import MODELS_DIR, PROJECT_DIR
 from common.serial_ports import list_serial_ports
 from system_monitor.ui.arm_monitor import ArmMonitor
 from system_monitor.ui.camera_feed import CameraFeed
@@ -62,6 +62,17 @@ MIN_VIDEO_ROW_HEIGHT = 340
 ARM_LOADING, ARM_SORTING = (role.key for role in ARM_ROLES)
 CAM_IMITATION, CAM_INSPECTION = (role.key for role in CAMERA_ROLES)
 
+# 검수 캠은 이 셀에서 직접 학습한 가중치만 쓴다.
+#
+# COCO 사전학습 모델(yolov8n 등)로 대체하면 안 된다 — 클래스 이름이 달라
+# config/class_scheme.yaml의 ball_names와 하나도 맞지 않고, 그러면 공 개수가
+# 늘 0으로 세어져 검사가 항상 REJECT로 떨어진다. 조용히 틀리느니 모델이 없다고
+# 알리는 편이 낫다. 그래서 없을 때 다른 모델로 갈아타지 않는다.
+INSPECTION_MODEL_PATH = MODELS_DIR / "best.pt"
+
+# 설정 파일에서 기준 개수를 꺼 뒀을 때 스핀박스에 띄울 값.
+DEFAULT_TARGET_COUNT = 1
+
 # 도구마다 어떤 장치를 내줘야 하는지. 한곳에만 적어 두고 두 방향(release/acquire)
 # 모두 이 표를 쓴다.
 TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -79,7 +90,7 @@ TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 class OperatorDashboard(tk.Tk):
     """장치 네 대의 상태와 영상을 보여 주고, 장치 소유권을 조정한다."""
 
-    def __init__(self, inspection_model_path: Path = OMX_MODEL_PATH) -> None:
+    def __init__(self, inspection_model_path: Path = INSPECTION_MODEL_PATH) -> None:
         super().__init__()
         from system_monitor.ui.ui_fonts import configure_korean_fonts
 
@@ -114,6 +125,7 @@ class OperatorDashboard(tk.Tk):
         self._build_ui()
         self._console_redirector.install()
         print(omx_assignment_status(loading_port, sorting_port))
+        print(self._inspection_model_status())
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(CONSOLE_POLL_MS, self._drain_console)
@@ -123,6 +135,39 @@ class OperatorDashboard(tk.Tk):
         self.after(200, self._scan_and_start_cameras)
         for arm in self.arms.values():
             arm.start()
+
+    @staticmethod
+    def _configured_target_count() -> int:
+        """설정 파일의 기준 개수. 스핀박스의 시작값이자, 다시 켰을 때 돌아갈 값이다."""
+        try:
+            from vision_inspection.class_scheme import load_target_count
+
+            configured = load_target_count()
+        except Exception:
+            configured = None
+        # 파일에서 개수 검사를 꺼 뒀으면(null) 스핀박스에는 1을 띄우되, 사용자가
+        # 건드리기 전까지는 덮어쓰지 않으므로 검사는 꺼진 상태로 남는다.
+        return DEFAULT_TARGET_COUNT if configured is None else configured
+
+    def _on_target_count_change(self, value: int) -> None:
+        """스핀박스에서 기준 개수를 바꿨을 때. 설정 파일은 건드리지 않는다."""
+        self.cameras[CAM_INSPECTION].set_target_count(value)
+        print(
+            f"[검수 캠] 기준 개수 {value}개로 변경 (이번 실행에만 적용, "
+            f"프로그램을 다시 켜면 설정값 {self._configured_target_count()}개로 돌아갑니다)"
+        )
+
+    def _inspection_model_status(self) -> str:
+        """검수 캠이 쓸 모델을 사람이 읽을 한 줄로. 없으면 무엇을 해야 하는지 알린다."""
+        path = self.inspection_model_path
+        if path.is_file():
+            size_mb = path.stat().st_size / 1024**2
+            return f"[검수 캠] 모델 {path.name} 사용 ({size_mb:.1f} MB)"
+        return (
+            f"[검수 캠] 모델 없음: {path}\n"
+            "  학습한 best.pt를 models/에 두어야 검사가 동작합니다. "
+            "다른 모델로 대체하지 않습니다 — 클래스 이름이 달라 항상 REJECT가 됩니다."
+        )
 
     # ------------------------------------------------------------------ UI 구성
 
@@ -196,7 +241,12 @@ class OperatorDashboard(tk.Tk):
         )
 
     def _build_result_bar(self) -> None:
-        self.result_bar = InspectionResultBar(self, font_family=self.ui_font_family)
+        self.result_bar = InspectionResultBar(
+            self,
+            font_family=self.ui_font_family,
+            target_count=self._configured_target_count(),
+            on_target_change=self._on_target_count_change,
+        )
         self.result_bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 0))
 
     def _build_tools_and_console(self) -> None:

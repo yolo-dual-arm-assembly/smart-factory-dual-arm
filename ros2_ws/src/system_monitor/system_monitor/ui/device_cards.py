@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import tkinter as tk
 from tkinter import ttk
+from typing import Callable
 
 import cv2
 from PIL import Image, ImageTk
@@ -32,6 +33,10 @@ REJECT_COLOR = "#cf222e"
 VIDEO_PADDING = 6
 # 위젯이 아직 배치되기 전에는 winfo_width()가 1을 준다. 그보다 작으면 맞추지 않는다.
 MIN_FIT_SIZE = 40
+
+# 바구니 하나에 들어갈 수 있는 공 개수의 상한. 실수로 큰 값을 넣는 것을 막는 정도의
+# 안전장치라 넉넉히 잡는다.
+MAX_TARGET_COUNT = 50
 
 
 def _lamp(connected: bool, released: bool) -> tuple[str, str]:
@@ -253,11 +258,21 @@ class VideoPanel(ttk.LabelFrame):
 
 
 class InspectionResultBar(ttk.Frame):
-    """검수 캠의 최신 판정을 한 줄로 보여 준다."""
+    """검수 캠의 최신 판정을 한 줄로 보여 주고, 기준 개수를 바꾸게 한다."""
 
-    def __init__(self, master: tk.Misc, *, font_family: str = "TkDefaultFont") -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        font_family: str = "TkDefaultFont",
+        target_count: int = 1,
+        on_target_change: Callable[[int], None] | None = None,
+    ) -> None:
         super().__init__(master, padding=(10, 6))
         self.columnconfigure(1, weight=1)
+
+        self._on_target_change = on_target_change or (lambda _value: None)
+        self._applied_target = target_count
 
         ttk.Label(self, text="검사 결과").grid(row=0, column=0, sticky="w")
 
@@ -270,10 +285,45 @@ class InspectionResultBar(ttk.Frame):
         )
         self.verdict_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
+        # 기준 개수는 운영 중에만 바꾼다. 설정 파일에는 쓰지 않으므로 프로그램을
+        # 다시 켜면 파일 값으로 돌아간다.
+        target_box = ttk.Frame(self)
+        target_box.grid(row=0, column=2, sticky="e", padx=(10, 12))
+        ttk.Label(target_box, text="기준 개수").grid(row=0, column=0, sticky="e")
+        self.target_var = tk.StringVar(value=str(target_count))
+        self.target_spin = ttk.Spinbox(
+            target_box,
+            from_=0,
+            to=MAX_TARGET_COUNT,
+            width=4,
+            justify="right",
+            textvariable=self.target_var,
+            command=self._apply_target,
+        )
+        self.target_spin.grid(row=0, column=1, sticky="e", padx=(4, 0))
+        # 화살표뿐 아니라 직접 입력한 값도 반영한다.
+        self.target_spin.bind("<Return>", self._apply_target)
+        self.target_spin.bind("<FocusOut>", self._apply_target)
+
         self.detail_var = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.detail_var, anchor="e").grid(
-            row=0, column=2, sticky="e"
+            row=0, column=3, sticky="e"
         )
+
+    def _apply_target(self, _event: object = None) -> None:
+        """입력값을 검사해 반영한다. 숫자가 아니면 직전 값으로 되돌린다."""
+        try:
+            value = int(self.target_var.get())
+        except ValueError:
+            self.target_var.set(str(self._applied_target))
+            return
+        value = max(0, min(MAX_TARGET_COUNT, value))
+        # 잘린 값이 있으면 화면도 맞춰 준다.
+        self.target_var.set(str(value))
+        if value == self._applied_target:
+            return
+        self._applied_target = value
+        self._on_target_change(value)
 
     def update_from(self, result: InspectionResult | None) -> None:
         if result is None:
