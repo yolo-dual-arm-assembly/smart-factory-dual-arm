@@ -81,9 +81,6 @@ DEFAULT_TARGET_COUNT = 1
 # 모두 이 표를 쓴다.
 TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # 도구 이름: (놓아야 할 팔, 놓아야 할 카메라)
-    "calibration": ((), (CAM_IMITATION,)),
-    "teaching": ((ARM_LOADING,), (CAM_IMITATION,)),
-    "mouse_approach": ((ARM_LOADING,), (CAM_IMITATION,)),
     "manual_control": ((ARM_LOADING,), ()),
     # 개발 도구는 자체 카메라 선택기로 아무 카메라나 열 수 있고, 수동 제어까지
     # 띄운다. 어느 것을 고를지 미리 알 수 없으므로 캠 두 대를 모두 내준다.
@@ -268,8 +265,6 @@ class OperatorDashboard(tk.Tk):
 
         self.omx_panel = OmxPanel(
             tools,
-            camera_busy_reason=self._camera_busy_reason,
-            camera_index=lambda: self.cameras[CAM_IMITATION].index or 0,
             omx_port=lambda: self.arms[ARM_LOADING].port,
             on_tool_start=self.release_devices,
             on_tool_end=self.acquire_devices,
@@ -516,12 +511,6 @@ class OperatorDashboard(tk.Tk):
             self.cameras[key].acquire()
         if arm_keys or camera_keys:
             print(f"[dashboard] {tool}에서 장치 회수")
-
-    def _camera_busy_reason(self) -> str | None:
-        """모방학습 캠을 도구가 쓸 수 없는 이유. 쓸 수 있으면 None."""
-        if self.cameras[CAM_IMITATION].index is None:
-            return "모방학습 캠이 배정되지 않았습니다. 카메라 연결을 확인하세요."
-        return None
 
     # ------------------------------------------------------------------ 개발 도구
 
