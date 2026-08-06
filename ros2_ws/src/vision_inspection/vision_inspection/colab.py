@@ -92,22 +92,38 @@ def drive_runs_dir(
     return drive_dir("runs", subdir=subdir, mount_point=mount_point)
 
 
-def archive_root(archive: Path) -> str | None:
-    """압축 안의 최상위 폴더 이름. 판별할 수 없으면 None.
+def archive_probe(archive: Path) -> tuple[str | None, str | None]:
+    """``(최상위 폴더, 첫 파일의 압축 내 경로)``를 돌려준다.
 
-    첫 항목만 읽는다. 0.5GB짜리 tar.gz의 전체 목록을 훑으면 느리기 때문이다.
+    앞에서부터 첫 **파일**을 만날 때까지만 읽는다. 0.5GB짜리 tar.gz의 전체
+    목록을 훑으면 느리기 때문이다.
+
+    첫 파일 경로가 필요한 이유: 최상위 폴더만 봐서는 이미 풀렸는지 알 수 없다.
+    ``train_set/``은 ``README.md`` 하나만 담긴 채로 git에 들어 있어서, 클론만
+    해도 폴더가 존재한다.
     """
     archive = Path(archive)
+    first_file: str | None = None
+    first_entry: str | None = None
+
     if archive.name.lower().endswith(".zip"):
         with zipfile.ZipFile(archive) as bundle:
-            names = bundle.namelist()
-            first = names[0] if names else ""
+            for info in bundle.infolist():
+                first_entry = first_entry or info.filename
+                if not info.is_dir():
+                    first_file = info.filename
+                    break
     else:
         with tarfile.open(archive) as bundle:
-            member = bundle.next()
-            first = member.name if member is not None else ""
-    root = first.strip("/").split("/")[0]
-    return root or None
+            while (member := bundle.next()) is not None:
+                first_entry = first_entry or member.name
+                if member.isfile():
+                    first_file = member.name
+                    break
+
+    source = first_file or first_entry or ""
+    root = source.strip("/").split("/")[0] or None
+    return root, first_file
 
 
 def extract_dataset(archive: Path, destination: Path, *, force: bool = False) -> Path:
@@ -119,9 +135,10 @@ def extract_dataset(archive: Path, destination: Path, *, force: bool = False) ->
     이미 풀려 있으면 건너뛴다. 같은 셀을 다시 실행해도 수 GB를 다시 풀지 않게
     하려는 것이다. 다시 풀려면 ``force=True``.
 
-    건너뛸지는 ``destination``이 아니라 **압축의 최상위 폴더**가 이미 채워져
-    있는지로 판단한다. ``destination``은 보통 git 클론처럼 원래 다른 파일이 들어
-    있는 곳이라, 그것만 보고 판단하면 압축을 영영 풀지 않는다.
+    건너뛸지는 **압축 안의 첫 파일이 목적지에 이미 있는지**로 판단한다. 폴더가
+    있는지로 보면 안 된다 — ``destination``은 보통 git 클론이라 원래 파일이 들어
+    있고, ``train_set/``마저 ``README.md`` 하나를 담은 채 git에 들어 있어서
+    클론만 해도 존재한다. 둘 다 압축을 영영 풀지 않는 원인이 된다.
     """
     archive = Path(archive)
     destination = Path(destination)
@@ -137,14 +154,17 @@ def extract_dataset(archive: Path, destination: Path, *, force: bool = False) ->
             f"({', '.join(ARCHIVE_SUFFIXES)} 중 하나여야 합니다)"
         )
 
-    root = archive_root(archive)
+    root, probe = archive_probe(archive)
     target = destination / root if root else destination
 
-    if target.is_dir() and any(target.iterdir()):
-        if not force:
-            count = sum(1 for path in target.rglob("*") if path.is_file())
-            print(f"[colab] {target}에 파일 {count}개가 이미 있어 건너뜁니다.")
-            return target
+    # probe를 못 구했다면(빈 압축 등) 판단을 포기하고 그냥 푼다. 잘못 건너뛰는
+    # 것보다 한 번 더 푸는 쪽이 낫다.
+    already = probe is not None and (destination / probe).is_file()
+    if already and not force:
+        count = sum(1 for path in target.rglob("*") if path.is_file())
+        print(f"[colab] {target}에 파일 {count}개가 이미 있어 건너뜁니다.")
+        return target
+    if force and target.is_dir():
         shutil.rmtree(target)
 
     destination.mkdir(parents=True, exist_ok=True)

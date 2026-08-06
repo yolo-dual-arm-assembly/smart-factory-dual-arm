@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from vision_inspection.colab import (
-    archive_root,
+    archive_probe,
     drive_runs_dir,
     extract_dataset,
     in_colab,
@@ -42,9 +42,34 @@ def make_zip(tmp_path: Path) -> Path:
     return archive
 
 
-def test_archive_root_reads_top_level_folder(tmp_path: Path) -> None:
-    assert archive_root(make_tarball(tmp_path)) == "train_set"
-    assert archive_root(make_zip(tmp_path)) == "train_set"
+def test_archive_probe_reads_root_and_first_file(tmp_path: Path) -> None:
+    for archive in (make_tarball(tmp_path), make_zip(tmp_path)):
+        root, probe = archive_probe(archive)
+        assert root == "train_set"
+        # 폴더가 아니라 실제 파일이어야 한다. 폴더로는 이미 풀렸는지 알 수 없다.
+        assert probe is not None and not probe.endswith("/")
+        assert probe.startswith("train_set/")
+
+
+def test_extract_when_target_folder_exists_with_tracked_file(tmp_path: Path) -> None:
+    """``train_set/``이 README.md 하나만 담은 채 이미 있어도 풀어야 한다.
+
+    회귀 방지: ``train_set/README.md``는 git에 추적되는 파일이라 클론만 해도
+    폴더가 생긴다. 폴더 존재나 '비어 있지 않음'으로 판단하면 압축을 영영
+    풀지 않는다 (Colab에서 실제로 겪은 문제).
+    """
+    archive = make_tarball(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / "train_set").mkdir(parents=True)
+    readme = repo / "train_set" / "README.md"
+    readme.write_text("데이터셋 폴더 규칙", encoding="utf-8")
+
+    extract_dataset(archive, repo)
+
+    assert (repo / "train_set/1_ball1/images/train/frame_000000.jpg").is_file()
+    assert (repo / "train_set/1_ball1/labels/train/frame_000000.txt").is_file()
+    # 추적 중인 README는 건드리지 않는다.
+    assert readme.is_file()
 
 
 def test_extract_into_non_empty_destination(tmp_path: Path) -> None:
