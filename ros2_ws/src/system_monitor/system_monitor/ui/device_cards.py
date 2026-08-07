@@ -332,7 +332,9 @@ class InspectionResultBar(ttk.Frame):
         self.verdict_label.configure(
             foreground=PASS_COLOR if result.result is RobotState.PASS else REJECT_COLOR
         )
+        # total_count에는 공(ball)만 세고 오투입(others)은 defect_count로
+        # 넘어온다. 화면의 '총'은 검출된 물체 전체(ball+others)를 보여준다.
         self.detail_var.set(
-            f"총 {result.total_count}개 · 정상 {result.normal_count} · "
-            f"불량 {result.defect_count}"
+            f"총 {result.total_count + result.defect_count}개 · "
+            f"정상 {result.total_count} · 불량 {result.defect_count}"
         )
