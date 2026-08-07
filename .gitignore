@@ -53,15 +53,15 @@ result/*
 !result/.gitkeep
 
 # Local training data and generated training runs
-train_set/images/train/*
-!train_set/images/train/.gitkeep
-train_set/images/val/*
-!train_set/images/val/.gitkeep
-train_set/labels/train/*
-!train_set/labels/train/.gitkeep
-train_set/labels/val/*
-!train_set/labels/val/.gitkeep
-train_set/**/*.cache
+# 촬영 세션별 폴더(1_ball1, 2_ball1, no_ball ...)가 자유롭게 늘어나므로 하위를
+# 통째로 제외하고, 폴더 규칙을 적어 둔 README만 남긴다.
+train_set/*
+!train_set/README.md
+# Colab 업로드용으로 만든 파생물(JPEG 사본, 압축 묶음). 원본에서 언제든 다시
+# 만들 수 있고 용량이 커서 저장소에 넣지 않는다.
+train_set_jpg/
+train_set*.tar.gz
+train_set*.zip
 runs/
 
 # Machine-specific camera/robot calibration and taught joint poses.
