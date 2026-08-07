@@ -21,7 +21,7 @@ from typing import Callable
 
 from common.constants import RobotState
 from common.messages import InspectionResult, RobotStatus
-from common.omx_controller import OmxConfig, OmxController
+from common.omx_controller import OmxCommunicationError, OmxConfig, OmxController
 
 PortCallback = Callable[[], str | None]
 ToolLifecycleCallback = Callable[[str], None]
@@ -33,6 +33,10 @@ TOOL_TEACHING = "sorting_teaching"
 # run()들은 판정 방향만 확인하므로(is_pass) 수동 실행용 최소 결과를 만들어 넘긴다.
 MANUAL_PASS = InspectionResult(total_count=1, defect_count=0, result=RobotState.PASS)
 MANUAL_REJECT = InspectionResult(total_count=1, defect_count=1, result=RobotState.REJECT)
+
+# 종료할 때 중단을 요청하고 워커가 정리를 끝낼 때까지 기다리는 시간. 토크 해제와
+# 포트 닫기만 남은 상태라 짧아도 충분하고, 넘겨도 daemon 스레드라 종료를 막지 않는다.
+MOTION_STOP_TIMEOUT_SEC = 3.0
 
 
 class SortingPanel(ttk.LabelFrame):
@@ -53,6 +57,8 @@ class SortingPanel(ttk.LabelFrame):
         self._on_tool_end = on_tool_end or (lambda _tool: None)
 
         self._motion_thread: threading.Thread | None = None
+        # 중단 버튼과 종료 처리가 워커 스레드의 컨트롤러를 건드려야 한다.
+        self._motion_controller: OmxController | None = None
         self._teach_window = None
 
         self._build_ui()
@@ -79,9 +85,14 @@ class SortingPanel(ttk.LabelFrame):
         )
         self.reject_button.grid(row=4, column=0, sticky="ew", pady=2)
 
+        self.stop_button = ttk.Button(
+            self, text="동작 중단", command=self.stop_motion, state="disabled"
+        )
+        self.stop_button.grid(row=5, column=0, sticky="ew", pady=(6, 2))
+
         self.status_var = tk.StringVar(value="대기")
         ttk.Label(self, textvariable=self.status_var, anchor="w", wraplength=210).grid(
-            row=5, column=0, sticky="ew", pady=(6, 0)
+            row=6, column=0, sticky="ew", pady=(6, 0)
         )
 
     # ------------------------------------------------------------------ 상태
@@ -151,21 +162,34 @@ class SortingPanel(ttk.LabelFrame):
             return
         port = self._omx_port()
         assert port is not None
+        # 컨트롤러는 메인 스레드에서 만들어 둔다. 그래야 워커가 연결을 잡기
+        # 전에 중단 버튼을 눌러도 요청이 전달된다.
+        controller = OmxController(OmxConfig(port=port))
+        self._motion_controller = controller
         self._on_tool_start(TOOL_MOTION)
         self._set_motion_buttons(enabled=False)
         self.status_var.set(f"{motion} 동작 실행 중...")
         self._motion_thread = threading.Thread(
-            target=self._motion_worker, args=(motion, port), daemon=True
+            target=self._motion_worker, args=(motion, controller), daemon=True
         )
         self._motion_thread.start()
 
-    def _motion_worker(self, motion: str, port: str) -> None:
+    def stop_motion(self) -> None:
+        """실행 중인 동작에 중단을 요청한다. 워커는 다음 확인 지점에서 멈춘다."""
+        controller = self._motion_controller
+        if controller is None:
+            return
+        controller.request_stop()
+        self.stop_button.configure(state="disabled")
+        self.status_var.set("중단 요청됨 — 정지 중...")
+
+    def _motion_worker(self, motion: str, controller: OmxController) -> None:
         # 동작 정의는 omx2_sorting이 소유한다. 여기서 waypoint를 다시 읽지 않는다.
         from omx2_sorting import pass_motion, reject_motion
 
-        controller = OmxController(OmxConfig(port=port))
         try:
             controller.connect()
+            self._check_motors(controller)
             if motion == "PASS":
                 status = pass_motion.run(controller, MANUAL_PASS)
             else:
@@ -187,10 +211,30 @@ class SortingPanel(ttk.LabelFrame):
             # 동작 중에 대시보드가 이미 닫혔다. 알릴 화면이 없다.
             pass
 
+    @staticmethod
+    def _check_motors(controller: OmxController) -> None:
+        """웨이포인트를 돌리기 전에 팔이 실제로 응답하는지 확인한다.
+
+        포트가 열려도 로봇 전원이 꺼져 있으면 모든 쓰기가 SDK 타임아웃을
+        꽉 채운다. 12스텝을 그대로 돌리면 100초 넘게 걸리므로 여기서 끊는다.
+        """
+        missing = controller.find_missing_motors()
+        if not missing:
+            return
+        if len(missing) == len(controller.expected_motor_ids()):
+            raise OmxCommunicationError(
+                f"{controller.config.port} 포트는 열렸지만 응답하는 모터가 "
+                f"없습니다 (확인한 ID: {missing}).\n"
+                "OMX 2의 전원, USB 케이블, 포트 배정을 확인하세요."
+            )
+        # 일부만 빠졌으면 막지 않는다. 그리퍼가 꺼져 있어도 이동은 유효하다.
+        print(f"[분류] 경고: 응답 없는 모터 ID {missing}")
+
     def _motion_done(self, motion: str, status: RobotStatus) -> None:
         if not self.winfo_exists():
             return
         self._motion_thread = None
+        self._motion_controller = None
         self._set_motion_buttons(enabled=True)
         self._on_tool_end(TOOL_MOTION)
         if status.success:
@@ -203,18 +247,33 @@ class SortingPanel(ttk.LabelFrame):
         state = "normal" if enabled else "disabled"
         for button in (self.teach_button, self.pass_button, self.reject_button):
             button.configure(state=state)
+        # 중단 버튼만 반대로 움직인다 — 동작 중일 때만 누를 수 있다.
+        self.stop_button.configure(state="disabled" if enabled else "normal")
 
     # ------------------------------------------------------------------ 종료
 
     def request_close(self) -> bool:
-        """대시보드 종료 직전에 부른다. 닫아도 되면 True."""
+        """대시보드 종료 직전에 부른다. 닫아도 되면 True.
+
+        동작 중이라도 사용자가 원하면 중단하고 닫는다. 예전에는 무조건
+        거부해서, 응답 없는 포트에 붙어 12스텝을 헛도는 동안 창을 닫지
+        못하고 터미널에서 Ctrl+C를 눌러야 했다.
+        """
         if self._motion_thread is not None and self._motion_thread.is_alive():
-            messagebox.showinfo(
+            if not messagebox.askyesno(
                 "분류 동작 실행 중",
-                "동작이 끝날 때까지 기다린 뒤 닫아 주세요.",
+                "분류 동작이 아직 실행 중입니다.\n"
+                "중단하고 종료할까요?\n\n"
+                "주의: 팔이 움직이는 중이면 토크가 풀리며 자세가 흐트러질 수 있습니다.",
                 parent=self.root,
-            )
-            return False
+                default=messagebox.NO,
+            ):
+                return False
+            if self._motion_controller is not None:
+                self._motion_controller.request_stop()
+            # 워커는 daemon 스레드라 프로세스가 끝나면 같이 죽는다. 그래도
+            # 잠깐 기다려 주면 토크 해제와 포트 닫기까지 정상적으로 끝난다.
+            self._motion_thread.join(timeout=MOTION_STOP_TIMEOUT_SEC)
         if self._teach_window is not None and self._teach_window.winfo_exists():
             # 교시 창의 토크 경고 흐름을 그대로 태운다.
             self._teach_window._on_close()
