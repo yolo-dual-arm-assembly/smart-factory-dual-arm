@@ -10,7 +10,12 @@ from pathlib import Path
 
 from common.constants import RobotId, RobotState
 from common.messages import InspectionResult, RobotStatus
-from common.omx_controller import OmxController
+from common.omx_controller import OmxCancelled, OmxController
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PACKAGE_ROOT / "config"
+REJECT_PATH = CONFIG_DIR / "reject_waypoints.json"
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +79,13 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
         # 5. JSON sequence 순서대로 실행
         # --------------------------------------------------
         for index, step in enumerate(sequence, start=1):
+            # 중단은 스텝 경계에서도 확인한다. 이동 중에는 컨트롤러가
+            # OmxCancelled를 던지지만, 대기 중이던 스텝은 여기서 걸린다.
+            if controller.stop_requested():
+                raise OmxCancelled(
+                    f"Step {index} 시작 전 중단되었습니다."
+                )
+
             action = step.get("action")
 
             print(
@@ -138,6 +150,16 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
             RobotState.COMPLETE,
             success=True,
             message="REJECT 바구니 분류 완료",
+        )
+
+    except OmxCancelled as cancelled:
+        print(f"=== OMX2 REJECT Motion 중단: {cancelled} ===")
+
+        return RobotStatus(
+            RobotId.SORTING,
+            RobotState.ERROR,
+            success=False,
+            message="REJECT 동작이 중단되었습니다.",
         )
 
     except Exception as error:

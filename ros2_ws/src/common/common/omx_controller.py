@@ -15,7 +15,7 @@ Baudrate 1,000,000
 from __future__ import annotations
 
 import math
-import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -31,6 +31,20 @@ try:
     _DXL_AVAILABLE = True
 except ImportError:
     _DXL_AVAILABLE = False
+
+
+class OmxCancelled(RuntimeError):
+    """사용자가 중단을 요청해 동작이 끊겼다."""
+
+
+class OmxCommunicationError(RuntimeError):
+    """모터가 응답하지 않아 동작을 이어 갈 수 없다."""
+
+
+# 응답 없는 포트에 붙으면 쓰기 한 번마다 SDK 패킷 타임아웃(약 34ms)을 꽉 채운다.
+# 몇 번 연속 실패하면 남은 웨이포인트를 끝까지 두드려 봐야 결과가 같으므로,
+# 수백 줄을 찍으며 수십 초를 버리는 대신 그 자리에서 예외로 끊는다.
+MAX_CONSECUTIVE_WRITE_FAILURES = 5
 
 
 # ---------------------------------------------------------------------------
@@ -275,11 +289,21 @@ class OmxController:
         self._port_handler: Optional[object] = None
         self._packet_handler: Optional[object] = None
         self._connected = False
+        # 동작은 워커 스레드에서 돌고 중단 요청은 GUI 스레드에서 온다.
+        self._cancel_event = threading.Event()
+        self._write_failures = 0
 
     # --- 연결 관리 ---
 
     def connect(self) -> None:
-        """포트를 열고 DYNAMIXEL 통신을 초기화한다."""
+        """포트를 열고 DYNAMIXEL 통신을 초기화한다.
+
+        포트가 열렸다고 로봇이 붙어 있다는 뜻은 아니다. 모터 응답까지
+        확인하려면 연결 후 :meth:`find_missing_motors`를 부른다. 여기서
+        자동으로 확인하지 않는 이유는, 연결 자체는 성공시켜 놓고 스스로
+        진단을 이어 가는 호출부(``run_vision_pick``의 연결 테스트 등)가
+        있기 때문이다.
+        """
         if not _DXL_AVAILABLE:
             raise RuntimeError(
                 "dynamixel-sdk 미설치: pip install dynamixel-sdk 후 재시도하세요."
@@ -297,7 +321,32 @@ class OmxController:
         self._port_handler = ph
         self._packet_handler = PacketHandler(self.config.protocol)
         self._connected = True
+        # 중단 플래그는 여기서 지우지 않는다. connect()는 워커 스레드에서
+        # 돌고 중단 요청은 그 전에 GUI 스레드에서 올 수 있는데, 여기서 지우면
+        # 연결 도중 들어온 요청이 조용히 사라진다. 해제는 clear_stop()으로만.
+        self._write_failures = 0
         print(f"[OMX] 연결됨: {self.config.port} @ {self.config.baudrate} bps")
+
+    def expected_motor_ids(self) -> list[int]:
+        """이 팔이 가지고 있어야 할 관절 + 그리퍼 ID."""
+        return [*self.config.joint_ids, self.config.gripper_id]
+
+    def find_missing_motors(self) -> list[int]:
+        """응답하지 않는 모터 ID를 반환한다. 빈 리스트면 전부 정상이다.
+
+        웨이포인트를 실행하기 전에 부르면, 응답 없는 포트에 수백 번 쓰기를
+        시도하며 수십 초를 버리는 대신 곧바로 판단할 수 있다.
+        """
+        self._check_connected()
+        return [
+            dxl_id for dxl_id in self.expected_motor_ids() if not self._ping(dxl_id)
+        ]
+
+    def _ping(self, dxl_id: int) -> bool:
+        _, result, _ = self._packet_handler.ping(  # type: ignore[union-attr]
+            self._port_handler, dxl_id
+        )
+        return result == COMM_SUCCESS
 
     def disconnect(self) -> None:
         """토크를 비활성화하고 포트를 닫는다."""
@@ -319,6 +368,37 @@ class OmxController:
     def is_connected(self) -> bool:
         """연결 여부를 반환한다."""
         return self._connected
+
+    # --- 중단 요청 ---
+
+    def request_stop(self) -> None:
+        """진행 중인 동작을 다음 확인 지점에서 멈춘다. 다른 스레드에서 불러도 된다.
+
+        멈춘 동작은 :class:`OmxCancelled`를 던지므로, 웨이포인트 시퀀스는
+        남은 스텝을 실행하지 않고 호출자에게 되돌아간다.
+        """
+        self._cancel_event.set()
+
+    def clear_stop(self) -> None:
+        """중단 요청을 지운다. 다음 동작을 시작하기 전에 부른다."""
+        self._cancel_event.clear()
+
+    def stop_requested(self) -> bool:
+        """중단이 요청된 상태인지 반환한다."""
+        return self._cancel_event.is_set()
+
+    def _raise_if_cancelled(self) -> None:
+        if self._cancel_event.is_set():
+            raise OmxCancelled("동작이 중단 요청으로 멈췄습니다.")
+
+    def _sleep(self, seconds: float) -> None:
+        """중단 요청이 오면 즉시 깨어나는 대기.
+
+        ``time.sleep``을 쓰면 2초짜리 스텝 하나를 끝까지 기다려야 중단이
+        먹히므로, 대기도 중단 신호를 함께 본다.
+        """
+        if self._cancel_event.wait(seconds):
+            raise OmxCancelled("동작이 중단 요청으로 멈췄습니다.")
 
     # --- 모터 스캔 ---
 
@@ -380,11 +460,12 @@ class OmxController:
         self.enable_torque()
 
         for step_angles in interpolate_joint_angles(start_angles, angles, steps):
+            self._raise_if_cancelled()
             for dxl_id, angle in zip(self.config.joint_ids, step_angles):
                 self._write_goal_position(dxl_id, angle_to_dxl(angle))
             if progress_callback is not None:
                 progress_callback(step_angles.copy())
-            time.sleep(update_interval)
+            self._sleep(update_interval)
 
     def move_joints(self, angles: list[float], duration: float = 2.0) -> None:
         """5개 관절을 지정 각도(라디안)로 이동한다.
@@ -399,12 +480,13 @@ class OmxController:
             raise ValueError(
                 f"각도 개수 불일치: {len(angles)} != {len(self.config.joint_ids)}"
             )
+        self._raise_if_cancelled()
         self.enable_torque()
         for dxl_id, angle in zip(self.config.joint_ids, angles):
             pos = angle_to_dxl(angle)
             self._write_goal_position(dxl_id, pos)
 
-        time.sleep(duration)
+        self._sleep(duration)
 
     def move_xyz(
         self,
@@ -444,13 +526,13 @@ class OmxController:
     def gripper_open(self, duration: float = 1.0) -> None:
         """그리퍼를 연다."""
         self.set_gripper_position(GRIPPER_OPEN_POS)
-        time.sleep(duration)
+        self._sleep(duration)
         print("[OMX] 그리퍼 열림")
 
     def gripper_close(self, duration: float = 1.0) -> None:
         """그리퍼를 닫는다."""
         self.set_gripper_position(GRIPPER_CLOSE_POS)
-        time.sleep(duration)
+        self._sleep(duration)
         print("[OMX] 그리퍼 닫힘")
 
     # --- 현재 상태 읽기 ---
@@ -496,11 +578,20 @@ class OmxController:
         )
 
     def _write_goal_position(self, dxl_id: int, position: int) -> None:
-        result, error = self._packet_handler.write4ByteTxRx(  # type: ignore[union-attr]
+        result, _error = self._packet_handler.write4ByteTxRx(  # type: ignore[union-attr]
             self._port_handler, dxl_id, ADDR_GOAL_POSITION, position
         )
-        if result != COMM_SUCCESS:
-            print(
-                f"[OMX] 쓰기 오류 ID={dxl_id}: "
-                f"{self._packet_handler.getTxRxResult(result)}"  # type: ignore[union-attr]
+        if result == COMM_SUCCESS:
+            self._write_failures = 0
+            return
+
+        self._write_failures += 1
+        print(
+            f"[OMX] 쓰기 오류 ID={dxl_id}: "
+            f"{self._packet_handler.getTxRxResult(result)}"  # type: ignore[union-attr]
+        )
+        if self._write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES:
+            raise OmxCommunicationError(
+                f"모터 쓰기가 연속 {self._write_failures}회 실패했습니다 "
+                f"(마지막 ID={dxl_id}). 로봇 전원과 케이블을 확인하세요."
             )

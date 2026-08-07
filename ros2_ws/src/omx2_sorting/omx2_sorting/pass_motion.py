@@ -10,7 +10,15 @@ from pathlib import Path
 
 from common.constants import RobotId, RobotState
 from common.messages import InspectionResult, RobotStatus
-from common.omx_controller import OmxController
+from common.omx_controller import OmxCancelled, OmxController
+
+
+# --------------------------------------------------
+# PASS waypoint JSON 경로
+# --------------------------------------------------
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PACKAGE_ROOT / "config"
+PASS_PATH = CONFIG_DIR / "pass_waypoints.json"
 
 
 # --------------------------------------------------
@@ -77,6 +85,13 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
         # 5. Sequence 순서대로 실행
         # --------------------------------------------------
         for index, step in enumerate(sequence, start=1):
+            # 중단은 스텝 경계에서도 확인한다. 이동 중에는 컨트롤러가
+            # OmxCancelled를 던지지만, 대기 중이던 스텝은 여기서 걸린다.
+            if controller.stop_requested():
+                raise OmxCancelled(
+                    f"Step {index} 시작 전 중단되었습니다."
+                )
+
             action = step.get("action")
 
             print(
@@ -150,6 +165,16 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
             RobotState.COMPLETE,
             success=True,
             message="PASS 바구니 분류 완료",
+        )
+
+    except OmxCancelled as cancelled:
+        print(f"=== OMX2 PASS Motion 중단: {cancelled} ===")
+
+        return RobotStatus(
+            RobotId.SORTING,
+            RobotState.ERROR,
+            success=False,
+            message="PASS 동작이 중단되었습니다.",
         )
 
     except Exception as error:
