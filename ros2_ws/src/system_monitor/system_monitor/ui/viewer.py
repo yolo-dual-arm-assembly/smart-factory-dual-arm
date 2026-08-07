@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 from common.camera import list_cameras, selectable_devices
 from common.constants import MODELS_DIR, PROJECT_DIR
+from common.messages import InspectionResult
 from common.serial_ports import list_serial_ports
 from system_monitor.ui.arm_monitor import ArmMonitor
 from system_monitor.ui.camera_feed import CameraFeed
@@ -113,6 +115,8 @@ class OperatorDashboard(tk.Tk):
         self._released_by: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
         # 콤보에 올려 둔 선택 가능한 카메라 목록.
         self._camera_devices: tuple = ()
+        # 콘솔에 마지막으로 찍은 확정 판정. 같은 판정을 두 번 찍지 않으려고 들고 있다.
+        self._logged_verdict: tuple | None = None
 
         loading_port, sorting_port = assign_omx_ports(list_serial_ports())
         self.arms: dict[str, ArmMonitor] = {
@@ -581,7 +585,49 @@ class OperatorDashboard(tk.Tk):
         self.result_bar.update_from(
             inspection_snapshot.inspection, settling=inspection_snapshot.settling
         )
+        self._log_verdict_change(inspection_snapshot.inspection)
         self.after(CARD_POLL_MS, self._poll_cards)
+
+    def _log_verdict_change(self, result: InspectionResult | None) -> None:
+        """확정 판정이 바뀐 순간에만 콘솔에 한 줄 남긴다.
+
+        여기 들어오는 값은 안정화 게이트(:mod:`vision_inspection.stability`)가
+        래치한 **확정** 판정이라, 개수가 흔들리는 동안에는 바뀌지 않는다. 그래서
+        전이만 걸러도 로그가 튀지 않는다. 흔들리는 중이라는 사실은 화면의
+        "안정화 중…" 표시가 맡고, 콘솔에는 확정된 것만 남긴다.
+
+        개수가 달라진 것도 전이로 치기 때문에 PASS가 이어져도 공이 늘거나 줄면
+        다시 찍힌다.
+        """
+        key = (
+            None
+            if result is None
+            else (result.result, result.total_count, result.defect_count)
+        )
+        if key == self._logged_verdict:
+            return
+        self._logged_verdict = key
+        # 카메라가 빠지거나 검수 캠이 비면 None이 된다. 판정이 아니므로 찍지 않되,
+        # 다시 붙었을 때 첫 판정은 새 전이로 남도록 위에서 기록만 해 둔다.
+        if result is None:
+            return
+        print(
+            f"{time.strftime('%H:%M:%S')} [검수] {result.result} — "
+            f"{self._verdict_reason(result)}"
+        )
+
+    def _verdict_reason(self, result: InspectionResult) -> str:
+        """판정 이유 한 줄. 기준 개수는 검수 캠이 실제로 쓰는 값을 그대로 쓴다."""
+        try:
+            from vision_inspection.inspection_logic import UNSET, verdict_reason
+
+            override = self.cameras[CAM_INSPECTION].target_count
+            # 덮어쓴 값이 없으면 UNSET을 넘겨 설정 파일 값을 쓰게 한다.
+            # None은 '개수 검사 끄기'라는 다른 뜻이라 그대로 넘기면 안 된다.
+            return verdict_reason(result, UNSET if override is None else override)
+        except Exception:
+            # 이유를 못 만들어도 판정 자체는 알려 준다.
+            return f"총 {result.total_count}개, 불량 {result.defect_count}개"
 
     def _drain_console(self) -> None:
         self.console.drain()

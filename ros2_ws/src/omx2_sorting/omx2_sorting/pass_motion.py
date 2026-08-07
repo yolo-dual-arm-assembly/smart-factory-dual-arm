@@ -21,6 +21,14 @@ CONFIG_DIR = PACKAGE_ROOT / "config"
 PASS_PATH = CONFIG_DIR / "pass_waypoints.json"
 
 
+# --------------------------------------------------
+# PASS waypoint JSON 경로
+# --------------------------------------------------
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PACKAGE_ROOT / "config"
+PASS_PATH = CONFIG_DIR / "pass_waypoints.json"
+
+
 def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
     """합격 바구니를 통과 라인으로 보낸다."""
 

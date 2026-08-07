@@ -18,6 +18,11 @@ CONFIG_DIR = PACKAGE_ROOT / "config"
 REJECT_PATH = CONFIG_DIR / "reject_waypoints.json"
 
 
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PACKAGE_ROOT / "config"
+REJECT_PATH = CONFIG_DIR / "reject_waypoints.json"
+
+
 def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
     """불량 바구니를 재작업 라인으로 보낸다."""
 
