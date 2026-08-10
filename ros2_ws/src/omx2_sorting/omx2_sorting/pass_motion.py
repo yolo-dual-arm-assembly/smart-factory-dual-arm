@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -12,13 +11,7 @@ from common.constants import RobotId, RobotState
 from common.messages import InspectionResult, RobotStatus
 from common.omx_controller import OmxCancelled, OmxController
 
-
-# --------------------------------------------------
-# PASS waypoint JSON 경로
-# --------------------------------------------------
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_DIR = PACKAGE_ROOT / "config"
-PASS_PATH = CONFIG_DIR / "pass_waypoints.json"
+from omx2_sorting.waypoints import load_waypoint_plan
 
 
 # --------------------------------------------------
@@ -56,21 +49,13 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
 
     try:
         # --------------------------------------------------
-        # 3. JSON 읽기
+        # 3. 전체 계획 사전 검증
         # --------------------------------------------------
-        data = json.loads(
-            PASS_PATH.read_text(encoding="utf-8")
+        plan = load_waypoint_plan(
+            PASS_PATH,
+            expected_motion="PASS",
         )
-
-        sequence = data.get("sequence", [])
-
-        if not sequence:
-            return RobotStatus(
-                RobotId.SORTING,
-                RobotState.ERROR,
-                success=False,
-                message="PASS sequence가 비어 있습니다.",
-            )
+        sequence = plan.steps
 
         print("\n=== OMX2 PASS Motion 시작 ===")
         print(f"파일: {PASS_PATH}")
@@ -92,7 +77,7 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
                     f"Step {index} 시작 전 중단되었습니다."
                 )
 
-            action = step.get("action")
+            action = step.action
 
             print(
                 f"[PASS {index}/{len(sequence)}] "
@@ -103,53 +88,27 @@ def run(controller: OmxController, inspection: InspectionResult) -> RobotStatus:
             # MOVE
             # ------------------------------
             if action == "move":
-                angles = step.get("angles")
-
-                if angles is None:
-                    raise ValueError(
-                        f"Step {index}: angles 값이 없습니다."
-                    )
-
-                duration = float(
-                    step.get("duration", 2.0)
-                )
+                assert step.angles is not None
 
                 controller.move_joints_smooth(
-                    angles,
-                    duration=duration,
+                    step.angles,
+                    duration=step.duration,
                 )
 
             # ------------------------------
             # GRIPPER CLOSE
             # ------------------------------
             elif action == "gripper_close":
-                duration = float(
-                    step.get("duration", 1.0)
-                )
-
                 controller.gripper_close(
-                    duration=duration
+                    duration=step.duration
                 )
 
             # ------------------------------
             # GRIPPER OPEN
             # ------------------------------
             elif action == "gripper_open":
-                duration = float(
-                    step.get("duration", 1.0)
-                )
-
                 controller.gripper_open(
-                    duration=duration
-                )
-
-            # ------------------------------
-            # 알 수 없는 action
-            # ------------------------------
-            else:
-                raise ValueError(
-                    f"Step {index}: "
-                    f"지원하지 않는 action입니다: {action}"
+                    duration=step.duration
                 )
 
             # Step 사이 안정화 시간

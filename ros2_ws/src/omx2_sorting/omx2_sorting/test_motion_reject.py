@@ -1,8 +1,9 @@
-import json
 import time
 from pathlib import Path
 
 from common.omx_controller import OmxController
+
+from omx2_sorting.waypoints import load_waypoint_plan
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -18,11 +19,11 @@ def run_reject_motion():
             f"REJECT waypoint 파일이 없습니다: {REJECT_PATH}"
         )
 
-    data = json.loads(
-        REJECT_PATH.read_text(encoding="utf-8")
+    plan = load_waypoint_plan(
+        REJECT_PATH,
+        expected_motion="REJECT",
     )
-
-    sequence = data["sequence"]
+    sequence = plan.steps
 
     print("\n=== OMX2 REJECT Motion ===")
     print(f"파일: {REJECT_PATH}")
@@ -39,7 +40,7 @@ def run_reject_motion():
         time.sleep(3)
 
         for index, step in enumerate(sequence, start=1):
-            action = step["action"]
+            action = step.action
 
             print(
                 f"\n[Step {index}/{len(sequence)}] "
@@ -47,34 +48,25 @@ def run_reject_motion():
             )
 
             if action == "move":
-                angles = step["angles"]
+                assert step.angles is not None
 
                 # 첫 테스트는 천천히.
                 # 정상 동작 확인 후 JSON duration을 쓰도록 변경 가능.
                 duration = 2.0
 
                 controller.move_joints_smooth(
-                    angles,
+                    step.angles,
                     duration=duration,
                 )
 
             elif action == "gripper_close":
-                duration = step.get("duration", 1.0)
-
                 controller.gripper_close(
-                    duration=duration
+                    duration=step.duration
                 )
 
             elif action == "gripper_open":
-                duration = step.get("duration", 1.0)
-
                 controller.gripper_open(
-                    duration=duration
-                )
-
-            else:
-                raise ValueError(
-                    f"알 수 없는 action입니다: {action}"
+                    duration=step.duration
                 )
 
             time.sleep(0.3)

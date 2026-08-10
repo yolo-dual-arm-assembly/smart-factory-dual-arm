@@ -5,6 +5,7 @@ import math
 import pytest
 
 from common.omx_controller import (
+    JOINT_LIMITS,
     PROFILE_VELOCITY,
     GRIPPER_CLOSE_POS,
     GRIPPER_OPEN_POS,
@@ -13,6 +14,7 @@ from common.omx_controller import (
     ik_5dof,
     fk_5dof,
     interpolate_joint_angles,
+    validate_joint_angles,
     gripper_percent_to_dxl,
     angle_to_dxl,
     dxl_to_angle,
@@ -95,6 +97,15 @@ class TestAngleConversion:
         assert 0 <= angle_to_dxl(10.0) <= 4095
         assert 0 <= angle_to_dxl(-10.0) <= 4095
 
+    def test_quantized_joint_limits_stay_inside_soft_limits(self) -> None:
+        """경계 각도를 모터 단위로 바꿔도 소프트 리밋 밖으로 나가지 않는다."""
+        for lower, upper in JOINT_LIMITS:
+            quantized_lower = dxl_to_angle(angle_to_dxl(lower))
+            quantized_upper = dxl_to_angle(angle_to_dxl(upper))
+
+            assert lower <= quantized_lower <= upper
+            assert lower <= quantized_upper <= upper
+
 
 class TestOmxConfig:
     def test_default_profile_velocity_is_slow_and_limited(self) -> None:
@@ -109,6 +120,51 @@ class TestOmxControllerFailurePropagation:
 
         with pytest.raises(ValueError, match="도달 불가능"):
             controller.move_xyz(1.0, 0.0, 0.0)
+
+
+class TestJointSoftLimits:
+    def test_accepts_inclusive_joint_boundaries(self) -> None:
+        lower = [limit[0] for limit in JOINT_LIMITS]
+        upper = [limit[1] for limit in JOINT_LIMITS]
+
+        assert validate_joint_angles(lower) == lower
+        assert validate_joint_angles(upper) == upper
+
+    @pytest.mark.parametrize("joint_index", range(5))
+    @pytest.mark.parametrize("side", ["lower", "upper"])
+    def test_identifies_joint_outside_limit(
+        self,
+        joint_index: int,
+        side: str,
+    ) -> None:
+        angles = [0.0] * 5
+        limit = JOINT_LIMITS[joint_index][0 if side == "lower" else 1]
+        angles[joint_index] = limit + (-0.001 if side == "lower" else 0.001)
+
+        with pytest.raises(ValueError, match=rf"Joint {joint_index + 1} 한계 초과"):
+            validate_joint_angles(angles)
+
+    @pytest.mark.parametrize("invalid", [math.nan, math.inf, -math.inf])
+    def test_rejects_non_finite_angle(self, invalid: float) -> None:
+        angles = [0.0] * 5
+        angles[2] = invalid
+
+        with pytest.raises(ValueError, match="Joint 3.*유한한 숫자"):
+            validate_joint_angles(angles)
+
+    def test_direct_move_rejects_target_before_connection(self) -> None:
+        controller = OmxController()
+
+        with pytest.raises(ValueError, match="Joint 2 한계 초과"):
+            controller.move_joints([0.0, math.pi, 0.0, 0.0, 0.0])
+
+    def test_smooth_move_rejects_target_before_connection(self) -> None:
+        controller = OmxController()
+
+        with pytest.raises(ValueError, match="Joint 4 한계 초과"):
+            controller.move_joints_smooth(
+                [0.0, 0.0, 0.0, math.pi, 0.0],
+            )
 
 
 class TestGripperConversion:

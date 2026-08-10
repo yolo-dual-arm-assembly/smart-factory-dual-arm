@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import math
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from numbers import Real
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -112,6 +114,59 @@ HOME_UPDATE_INTERVAL = 0.05
 
 
 # ---------------------------------------------------------------------------
+# 안전 검증
+# ---------------------------------------------------------------------------
+def validate_joint_angles(
+    angles: Sequence[float],
+    *,
+    label: str = "목표 관절각",
+) -> list[float]:
+    """5개 관절각이 유한한 수이고 소프트 리밋 안인지 검증한다.
+
+    검증된 값을 ``float`` 리스트로 반환하므로 JSON에서 읽은 숫자도 이후
+    동작에서 같은 표현을 사용한다. 이 함수는 하드웨어 접근 없이 호출할 수 있어,
+    전체 동작 계획을 모터 연결 전에 사전 검증하는 데도 사용한다.
+    """
+    if isinstance(angles, (str, bytes)) or not isinstance(angles, Sequence):
+        raise ValueError(
+            f"{label}: 관절각은 순서가 있는 숫자 목록이어야 합니다."
+        )
+    if len(angles) != len(JOINT_LIMITS):
+        raise ValueError(
+            f"{label}: 각도 개수 불일치: "
+            f"{len(angles)} != {len(JOINT_LIMITS)}"
+        )
+
+    validated: list[float] = []
+    for index, (angle, (lower, upper)) in enumerate(
+        zip(angles, JOINT_LIMITS),
+        start=1,
+    ):
+        if isinstance(angle, bool) or not isinstance(angle, Real):
+            raise ValueError(
+                f"{label} Joint {index}: 유한한 숫자가 필요합니다 "
+                f"(입력: {angle!r})."
+            )
+
+        value = float(angle)
+        if not math.isfinite(value):
+            raise ValueError(
+                f"{label} Joint {index}: 유한한 숫자가 필요합니다 "
+                f"(입력: {value!r})."
+            )
+        if not lower <= value <= upper:
+            raise ValueError(
+                f"{label} Joint {index} 한계 초과: "
+                f"{math.degrees(value):.1f}° "
+                f"(허용: {math.degrees(lower):.1f}°~"
+                f"{math.degrees(upper):.1f}°)"
+            )
+        validated.append(value)
+
+    return validated
+
+
+# ---------------------------------------------------------------------------
 # 데이터 클래스
 # ---------------------------------------------------------------------------
 @dataclass
@@ -194,17 +249,10 @@ def ik_5dof(x: float, y: float, z: float) -> list[float]:
     theta5 = 0.0
 
 
-    angles = [theta1, theta2, theta3, theta4, theta5]
-
-    # 관절 한계 확인
-    for i, (angle, (lo, hi)) in enumerate(zip(angles, JOINT_LIMITS)):
-        if not (lo <= angle <= hi):
-            raise ValueError(
-                f"Joint {i + 1} 한계 초과: {math.degrees(angle):.1f}° "
-                f"(허용: {math.degrees(lo):.1f}°~{math.degrees(hi):.1f}°)"
-            )
-
-    return angles
+    return validate_joint_angles(
+        [theta1, theta2, theta3, theta4, theta5],
+        label="IK 결과",
+    )
 
 
 def fk_5dof(angles: list[float]) -> tuple[float, float, float]:
@@ -232,7 +280,12 @@ def fk_5dof(angles: list[float]) -> tuple[float, float, float]:
 def angle_to_dxl(angle_rad: float) -> int:
     """라디안 관절각을 DYNAMIXEL 위치값(0-4095)으로 변환."""
     # 중심 2048 기준: ±π = ±2048 단위
-    pos = int(DXL_CENTER_POSITION + (angle_rad / math.pi) * DXL_CENTER_POSITION)
+    # int() 내림은 J2 -120°를 한계 바깥쪽 raw 값으로 만들 수 있으므로 가장
+    # 가까운 정수 위치를 사용한다.
+    pos = round(
+        DXL_CENTER_POSITION
+        + (angle_rad / math.pi) * DXL_CENTER_POSITION
+    )
     return max(DXL_MINIMUM_POSITION, min(DXL_MAXIMUM_POSITION, pos))
 
 
@@ -441,25 +494,37 @@ class OmxController:
 
     def move_joints_smooth(
         self,
-        angles: list[float],
+        angles: Sequence[float],
         duration: float = HOME_MOVE_DURATION,
         update_interval: float = HOME_UPDATE_INTERVAL,
         progress_callback: Optional[Callable[[list[float]], None]] = None,
     ) -> None:
         """현재 위치와 목표 위치 사이를 보간하여 관절을 부드럽게 이동한다."""
-        self._check_connected()
-        if len(angles) != len(self.config.joint_ids):
+        target_angles = validate_joint_angles(angles)
+        if len(target_angles) != len(self.config.joint_ids):
             raise ValueError(
-                f"각도 개수 불일치: {len(angles)} != {len(self.config.joint_ids)}"
+                "컨트롤러 관절 ID와 소프트 리밋 개수가 일치하지 않습니다: "
+                f"{len(self.config.joint_ids)} != {len(JOINT_LIMITS)}"
             )
-        if duration <= 0 or update_interval <= 0:
+        if (
+            not math.isfinite(duration)
+            or not math.isfinite(update_interval)
+            or duration <= 0
+            or update_interval <= 0
+        ):
             raise ValueError("이동 시간과 갱신 간격은 0보다 커야 합니다.")
 
+        self._check_connected()
         start_angles = self.read_joint_state().angles
+        validate_joint_angles(start_angles, label="현재 관절각")
         steps = max(1, math.ceil(duration / update_interval))
         self.enable_torque()
 
-        for step_angles in interpolate_joint_angles(start_angles, angles, steps):
+        for step_angles in interpolate_joint_angles(
+            start_angles,
+            target_angles,
+            steps,
+        ):
             self._raise_if_cancelled()
             for dxl_id, angle in zip(self.config.joint_ids, step_angles):
                 self._write_goal_position(dxl_id, angle_to_dxl(angle))
@@ -467,7 +532,11 @@ class OmxController:
                 progress_callback(step_angles.copy())
             self._sleep(update_interval)
 
-    def move_joints(self, angles: list[float], duration: float = 2.0) -> None:
+    def move_joints(
+        self,
+        angles: Sequence[float],
+        duration: float = 2.0,
+    ) -> None:
         """5개 관절을 지정 각도(라디안)로 이동한다.
 
         Args:
@@ -475,14 +544,19 @@ class OmxController:
             duration: 목표 위치 전송 후 대기 시간(초). 이동 속도는
                 ``OmxConfig.profile_velocity``로 설정한다.
         """
-        self._check_connected()
-        if len(angles) != len(self.config.joint_ids):
+        target_angles = validate_joint_angles(angles)
+        if len(target_angles) != len(self.config.joint_ids):
             raise ValueError(
-                f"각도 개수 불일치: {len(angles)} != {len(self.config.joint_ids)}"
+                "컨트롤러 관절 ID와 소프트 리밋 개수가 일치하지 않습니다: "
+                f"{len(self.config.joint_ids)} != {len(JOINT_LIMITS)}"
             )
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError("이동 시간은 0 이상의 유한한 값이어야 합니다.")
+
+        self._check_connected()
         self._raise_if_cancelled()
         self.enable_torque()
-        for dxl_id, angle in zip(self.config.joint_ids, angles):
+        for dxl_id, angle in zip(self.config.joint_ids, target_angles):
             pos = angle_to_dxl(angle)
             self._write_goal_position(dxl_id, pos)
 
