@@ -85,6 +85,12 @@ class OmxPanel(ttk.LabelFrame):
         """OMX 1 도구가 포트를 점유 중인지 반환한다."""
         return self._tool_process is not None and self._tool_process.poll() is None
 
+    def set_external_busy(self, busy: bool) -> None:
+        """통합 공정이 OMX1을 소유하는 동안 수동 제어 버튼을 잠근다."""
+        if self.is_busy():
+            return
+        self.manual_button.configure(state="disabled" if busy else "normal")
+
     def _ensure_available(self) -> bool:
         if self.is_busy():
             messagebox.showwarning(

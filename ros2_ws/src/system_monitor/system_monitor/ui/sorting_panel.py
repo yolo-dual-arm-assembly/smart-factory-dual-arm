@@ -9,8 +9,8 @@
 OMX 1)를 잡으므로 두 팔이 연결된 상태에서는 **적재 팔이 움직이는 사고**가
 난다. GUI 경로는 반드시 배정된 포트를 명시적으로 넘긴다.
 
-실행은 수동 버튼뿐이다. 검수 판정과 자동 연동하지 않는다 — 아직 사람이 눌러
-확인하며 검증하는 단계다.
+패널 버튼은 사람이 눌러 검증하는 수동 실행이다. 통합 공정은 아래의
+:func:`execute_sorting_motion`을 재사용해 확정된 검사 판정을 넘긴다.
 """
 from __future__ import annotations
 
@@ -37,6 +37,34 @@ MANUAL_REJECT = InspectionResult(total_count=1, defect_count=1, result=RobotStat
 # 종료할 때 중단을 요청하고 워커가 정리를 끝낼 때까지 기다리는 시간. 토크 해제와
 # 포트 닫기만 남은 상태라 짧아도 충분하고, 넘겨도 daemon 스레드라 종료를 막지 않는다.
 MOTION_STOP_TIMEOUT_SEC = 3.0
+
+
+def check_sorting_motors(controller: OmxController) -> None:
+    """웨이포인트 실행 전에 분류 팔이 실제로 응답하는지 확인한다."""
+    missing = controller.find_missing_motors()
+    if not missing:
+        return
+    if len(missing) == len(controller.expected_motor_ids()):
+        raise OmxCommunicationError(
+            f"{controller.config.port} 포트는 열렸지만 응답하는 모터가 "
+            f"없습니다 (확인한 ID: {missing}).\n"
+            "OMX 2의 전원, USB 케이블, 포트 배정을 확인하세요."
+        )
+    # 기존 수동 실행 정책을 유지한다. 일부 모터 누락은 콘솔에 경고하고
+    # 웨이포인트 실행기가 각 명령의 성공/실패를 판단하게 한다.
+    print(f"[분류] 경고: 응답 없는 모터 ID {missing}")
+
+
+def execute_sorting_motion(
+    controller: OmxController, inspection: InspectionResult
+) -> RobotStatus:
+    """이미 연결된 컨트롤러로 검사 판정에 맞는 분류 동작을 한 번 실행한다."""
+    from omx2_sorting import pass_motion, reject_motion
+
+    check_sorting_motors(controller)
+    if inspection.is_pass:
+        return pass_motion.run(controller, inspection)
+    return reject_motion.run(controller, inspection)
 
 
 class SortingPanel(ttk.LabelFrame):
@@ -109,6 +137,15 @@ class SortingPanel(ttk.LabelFrame):
         return self._teach_window is not None and bool(
             self._teach_window.winfo_exists()
         )
+
+    def set_external_busy(self, busy: bool) -> None:
+        """통합 공정이 OMX2를 소유하는 동안 수동 분류 버튼을 잠근다."""
+        if self.is_busy():
+            return
+        state = "disabled" if busy else "normal"
+        for button in (self.teach_button, self.pass_button, self.reject_button):
+            button.configure(state=state)
+        self.stop_button.configure(state="disabled")
 
     def _ensure_available(self) -> bool:
         if self.is_busy():
@@ -184,16 +221,10 @@ class SortingPanel(ttk.LabelFrame):
         self.status_var.set("중단 요청됨 — 정지 중...")
 
     def _motion_worker(self, motion: str, controller: OmxController) -> None:
-        # 동작 정의는 omx2_sorting이 소유한다. 여기서 waypoint를 다시 읽지 않는다.
-        from omx2_sorting import pass_motion, reject_motion
-
         try:
             controller.connect()
-            self._check_motors(controller)
-            if motion == "PASS":
-                status = pass_motion.run(controller, MANUAL_PASS)
-            else:
-                status = reject_motion.run(controller, MANUAL_REJECT)
+            inspection = MANUAL_PASS if motion == "PASS" else MANUAL_REJECT
+            status = execute_sorting_motion(controller, inspection)
         except Exception as error:
             status = RobotStatus(
                 "OMX_2", RobotState.ERROR, success=False, message=str(error)
@@ -210,25 +241,6 @@ class SortingPanel(ttk.LabelFrame):
         except (RuntimeError, tk.TclError):
             # 동작 중에 대시보드가 이미 닫혔다. 알릴 화면이 없다.
             pass
-
-    @staticmethod
-    def _check_motors(controller: OmxController) -> None:
-        """웨이포인트를 돌리기 전에 팔이 실제로 응답하는지 확인한다.
-
-        포트가 열려도 로봇 전원이 꺼져 있으면 모든 쓰기가 SDK 타임아웃을
-        꽉 채운다. 12스텝을 그대로 돌리면 100초 넘게 걸리므로 여기서 끊는다.
-        """
-        missing = controller.find_missing_motors()
-        if not missing:
-            return
-        if len(missing) == len(controller.expected_motor_ids()):
-            raise OmxCommunicationError(
-                f"{controller.config.port} 포트는 열렸지만 응답하는 모터가 "
-                f"없습니다 (확인한 ID: {missing}).\n"
-                "OMX 2의 전원, USB 케이블, 포트 배정을 확인하세요."
-            )
-        # 일부만 빠졌으면 막지 않는다. 그리퍼가 꺼져 있어도 이동은 유효하다.
-        print(f"[분류] 경고: 응답 없는 모터 ID {missing}")
 
     def _motion_done(self, motion: str, status: RobotStatus) -> None:
         if not self.winfo_exists():

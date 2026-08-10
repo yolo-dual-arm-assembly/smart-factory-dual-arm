@@ -19,14 +19,16 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 from common.camera import list_cameras, selectable_devices
-from common.constants import MODELS_DIR, PROJECT_DIR
-from common.messages import InspectionResult
+from common.constants import MODELS_DIR, OMX_CALIBRATION_PATH, PROJECT_DIR
+from common.messages import InspectionResult, RobotStatus
+from common.omx_controller import OmxConfig, OmxController
 from common.serial_ports import list_serial_ports
 from system_monitor.ui.arm_monitor import ArmMonitor
 from system_monitor.ui.camera_feed import CameraFeed
@@ -45,11 +47,17 @@ from system_monitor.ui.device_roles import (
     camera_assignment_status,
     omx_assignment_status,
 )
+from system_monitor.ui.integrated_process import (
+    DeviceAvailability,
+    ProcessPlan,
+    build_process_plan,
+)
 from system_monitor.ui.omx_panel import OmxPanel
 from system_monitor.ui.sorting_panel import (
     TOOL_MOTION as SORTING_MOTION,
     TOOL_TEACHING as SORTING_TEACHING,
     SortingPanel,
+    execute_sorting_motion,
 )
 
 CONSOLE_POLL_MS = 100
@@ -64,6 +72,11 @@ CONSOLE_HEIGHT_LINES = 6
 CONSOLE_WIDTH_CHARS = 40
 # 영상 행이 카드·도구에 밀려 납작해지지 않도록 최소 높이를 준다.
 MIN_VIDEO_ROW_HEIGHT = 340
+# 새 검사 판정이 안정화되기를 기다리는 최대 시간. 정상 상태에서는 안정화
+# 게이트(1초, 3표본)가 먼저 끝나고, 모델/카메라가 멈췄을 때만 이 제한에 닿는다.
+INSPECTION_TIMEOUT_SEC = 15.0
+INSPECTION_POLL_SEC = 0.1
+TOOL_INTEGRATED = "integrated_process"
 
 ARM_LOADING, ARM_SORTING = (role.key for role in ARM_ROLES)
 CAM_IMITATION, CAM_INSPECTION = (role.key for role in CAMERA_ROLES)
@@ -93,6 +106,10 @@ TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 }
 
 
+class _ProcessCancelled(RuntimeError):
+    """사용자가 통합 공정 중단을 요청했음을 워커 안에서 구분한다."""
+
+
 class OperatorDashboard(tk.Tk):
     """장치 네 대의 상태와 영상을 보여 주고, 장치 소유권을 조정한다."""
 
@@ -117,6 +134,11 @@ class OperatorDashboard(tk.Tk):
         self._camera_devices: tuple = ()
         # 콘솔에 마지막으로 찍은 확정 판정. 같은 판정을 두 번 찍지 않으려고 들고 있다.
         self._logged_verdict: tuple | None = None
+        self._integrated_thread: threading.Thread | None = None
+        self._integrated_cancel = threading.Event()
+        # 중단 버튼이 현재 단계에 즉시 요청을 전달할 수 있게 워커가 채운다.
+        self._integrated_loading_runner = None
+        self._integrated_sorting_controller: OmxController | None = None
 
         loading_port, sorting_port = assign_omx_ports(list_serial_ports())
         self.arms: dict[str, ArmMonitor] = {
@@ -188,6 +210,7 @@ class OperatorDashboard(tk.Tk):
         self._build_status_row()
         self._build_video_row()
         self._build_result_bar()
+        self._build_integrated_bar()
         self._build_tools_and_console()
 
     def _build_status_row(self) -> None:
@@ -257,9 +280,32 @@ class OperatorDashboard(tk.Tk):
         )
         self.result_bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 0))
 
+    def _build_integrated_bar(self) -> None:
+        bar = ttk.LabelFrame(self, text="통합 공정", padding=(10, 6))
+        bar.grid(row=3, column=0, sticky="ew", padx=10, pady=(8, 0))
+        bar.columnconfigure(2, weight=1)
+
+        self.integrated_button = ttk.Button(
+            bar, text="▶ 통합 공정 실행", command=self.start_integrated_process
+        )
+        self.integrated_button.grid(row=0, column=0, sticky="w")
+        self.integrated_stop_button = ttk.Button(
+            bar,
+            text="중단",
+            command=self.stop_integrated_process,
+            state="disabled",
+        )
+        self.integrated_stop_button.grid(row=0, column=1, sticky="w", padx=(8, 12))
+        self.integrated_status_var = tk.StringVar(
+            value="대기 · OMX1 적재 → 비전 검사 → OMX2 분류"
+        )
+        ttk.Label(
+            bar, textvariable=self.integrated_status_var, anchor="w", wraplength=900
+        ).grid(row=0, column=2, sticky="ew")
+
     def _build_tools_and_console(self) -> None:
         bottom = ttk.Frame(self, padding=(10, 8, 10, 10))
-        bottom.grid(row=3, column=0, sticky="nsew")
+        bottom.grid(row=4, column=0, sticky="nsew")
         # 도구를 세로로 쌓으면 이 행이 창의 절반을 먹어 영상이 눌린다.
         # OMX1 도구 · OMX2 분류 · 카메라 배정 · 콘솔을 가로로 나란히 둔다.
         bottom.columnconfigure(3, weight=1)
@@ -345,6 +391,340 @@ class OperatorDashboard(tk.Tk):
             width=CONSOLE_WIDTH_CHARS,
         )
         self.console.grid(row=0, column=3, sticky="nsew")
+
+    # ------------------------------------------------------------------ 통합 공정
+
+    def _integrated_is_running(self) -> bool:
+        thread = self._integrated_thread
+        return thread is not None and thread.is_alive()
+
+    def _device_availability(self) -> DeviceAvailability:
+        """카드에 표시하는 것과 같은 스냅샷으로 네 장치를 한 번에 확인한다."""
+        loading = self.arms[ARM_LOADING].snapshot()
+        sorting = self.arms[ARM_SORTING].snapshot()
+        imitation = self.cameras[CAM_IMITATION].snapshot()
+        inspection = self.cameras[CAM_INSPECTION].snapshot()
+        return DeviceAvailability(
+            omx1=loading.connected and not loading.released,
+            omx2=sorting.connected and not sorting.released,
+            imitation_camera=imitation.connected and not imitation.released,
+            inspection_camera=inspection.connected and not inspection.released,
+        )
+
+    def start_integrated_process(self) -> None:
+        """장치 확인 후 가능한 적재·검사·분류 단계를 워커에서 순차 실행한다."""
+        if self._integrated_is_running():
+            return
+        if (
+            self.omx_panel.is_busy()
+            or self.sorting_panel.is_busy()
+            or (self._dev_process is not None and self._dev_process.poll() is None)
+            or bool(self._released_by)
+        ):
+            messagebox.showwarning(
+                "다른 작업 실행 중",
+                "수동 제어·분류·개발 도구를 먼저 종료한 뒤 통합 공정을 실행하세요.",
+                parent=self,
+            )
+            return
+
+        devices = self._device_availability()
+        model_ready = self.inspection_model_path.is_file()
+        calibration_ready = OMX_CALIBRATION_PATH.is_file()
+        plan = build_process_plan(
+            devices,
+            loading_configured=model_ready and calibration_ready,
+            inspection_configured=model_ready,
+        )
+
+        unavailable = list(devices.missing_labels())
+        if not calibration_ready:
+            unavailable.append("OMX 1 좌표 보정 파일")
+        if not model_ready:
+            unavailable.append("YOLO 검사/적재 모델")
+
+        if unavailable:
+            missing_text = "\n".join(f"- {label}" for label in unavailable)
+            if not messagebox.askyesno(
+                "일부 장치·설정 없음",
+                "다음 항목을 사용할 수 없습니다.\n\n"
+                f"{missing_text}\n\n"
+                "관련 단계는 건너뛰고 가능한 단계만 순서대로 실행할까요?\n"
+                "실행 전 두 로봇의 작업 영역이 비어 있는지 확인하세요.",
+                parent=self,
+                default=messagebox.NO,
+            ):
+                return
+        elif not messagebox.askyesno(
+            "통합 공정 실행",
+            "OMX1 적재 → 비전 검사 → OMX2 분류를 실제로 한 번 실행합니다.\n\n"
+            "두 로봇의 작업 영역이 비어 있고 비상정지가 가능한 상태입니까?",
+            parent=self,
+            default=messagebox.NO,
+        ):
+            return
+
+        if not plan.has_runnable_stage:
+            summary = ", ".join(f"{stage}({reason})" for stage, reason in plan.skipped)
+            self.integrated_status_var.set("실행 가능한 단계 없음")
+            print(f"[통합 공정] 실행 가능한 단계 없음 · {summary}")
+            return
+
+        loading_port = self.arms[ARM_LOADING].port
+        sorting_port = self.arms[ARM_SORTING].port
+        imitation_index = self.cameras[CAM_IMITATION].index
+        self._integrated_cancel.clear()
+        self._set_integrated_busy(True)
+        self._release_integrated_devices(plan)
+
+        skipped = ", ".join(stage for stage, _reason in plan.skipped)
+        if skipped:
+            print(f"[통합 공정] 건너뜀: {skipped}")
+        self.integrated_status_var.set("통합 공정 시작 중...")
+        self._integrated_thread = threading.Thread(
+            target=self._integrated_worker,
+            args=(plan, loading_port, sorting_port, imitation_index),
+            name="integrated-process",
+            daemon=True,
+        )
+        self._integrated_thread.start()
+
+    def _release_integrated_devices(self, plan: ProcessPlan) -> None:
+        """이번 계획이 실제로 쓰는 배타 장치만 대시보드 감시에서 해제한다."""
+        arm_keys: list[str] = []
+        camera_keys: list[str] = []
+        if plan.run_loading:
+            arm_keys.append(ARM_LOADING)
+            camera_keys.append(CAM_IMITATION)
+        if plan.run_sorting:
+            arm_keys.append(ARM_SORTING)
+        needs = (tuple(arm_keys), tuple(camera_keys))
+        for key in arm_keys:
+            self.arms[key].release()
+        for key in camera_keys:
+            self.cameras[key].release()
+        self._released_by[TOOL_INTEGRATED] = needs
+        if arm_keys or camera_keys:
+            print(
+                "[dashboard] 통합 공정에 장치 인계: "
+                f"{arm_keys + camera_keys}"
+            )
+
+    def _integrated_worker(
+        self,
+        plan: ProcessPlan,
+        loading_port: str | None,
+        sorting_port: str | None,
+        imitation_index: int | None,
+    ) -> None:
+        completed: list[str] = []
+        inspection: InspectionResult | None = None
+        outcome = "completed"
+        detail = ""
+        try:
+            if plan.run_loading:
+                if loading_port is None or imitation_index is None:
+                    raise RuntimeError(
+                        "OMX1 적재 장치 배정이 실행 직전에 사라졌습니다."
+                    )
+                self._set_integrated_status("1/3 · OMX1 적재 중 — 물체 탐지 대기")
+                self._run_loading_once(loading_port, imitation_index)
+                self._raise_if_integrated_cancelled()
+                completed.append("OMX1 적재")
+                print("[통합 공정] OMX1 적재 완료")
+
+            if plan.run_inspection:
+                self._raise_if_integrated_cancelled()
+                self._set_integrated_status("2/3 · 새 검사 판정 안정화 대기 중...")
+                inspection = self._wait_for_fresh_inspection()
+                if inspection is None:
+                    detail = (
+                        f"{INSPECTION_TIMEOUT_SEC:.0f}초 안에 새 검사 결과가 "
+                        "확정되지 않아 OMX2 분류를 건너뛰었습니다."
+                    )
+                    outcome = "partial"
+                    print(f"[통합 공정] {detail}")
+                else:
+                    completed.append("비전 검사")
+                    print(
+                        f"[통합 공정] 검사 완료: {inspection.result} · "
+                        f"전체 {inspection.total_count}, 불량 {inspection.defect_count}"
+                    )
+
+            if plan.run_sorting and inspection is not None:
+                self._raise_if_integrated_cancelled()
+                if sorting_port is None:
+                    raise RuntimeError("OMX2 포트 배정이 실행 직전에 사라졌습니다.")
+                motion = "PASS" if inspection.is_pass else "REJECT"
+                self._set_integrated_status(f"3/3 · OMX2 {motion} 분류 중...")
+                status = self._run_sorting_once(sorting_port, inspection)
+                if not status.success:
+                    raise RuntimeError(status.message or f"OMX2 {motion} 동작 실패")
+                completed.append(f"OMX2 {motion} 분류")
+                print(f"[통합 공정] {motion} 분류 완료: {status.message}")
+
+            self._raise_if_integrated_cancelled()
+        except _ProcessCancelled:
+            outcome = "cancelled"
+            detail = "사용자 요청으로 중단했습니다."
+            print("[통합 공정] 사용자 중단")
+        except Exception as error:
+            if self._integrated_cancel.is_set():
+                outcome = "cancelled"
+                detail = "사용자 요청으로 중단했습니다."
+                print(f"[통합 공정] 사용자 중단: {error}")
+            else:
+                outcome = "failed"
+                detail = str(error)
+                print(f"[통합 공정] 실패: {error}")
+        finally:
+            self._integrated_loading_runner = None
+            self._integrated_sorting_controller = None
+            try:
+                self.after(
+                    0,
+                    self._integrated_done,
+                    outcome,
+                    tuple(completed),
+                    detail,
+                    plan,
+                )
+            except (RuntimeError, tk.TclError):
+                pass
+
+    def _run_loading_once(self, port: str, camera_index: int) -> None:
+        """기존 OMX1 Pick & Place 실행기를 첫 동작 뒤 종료되도록 감싼다."""
+        from omx1_loading.coordinate_transform import OmxCalibration
+        from omx1_loading.pick_ball import OmxVisionRunner, State
+
+        dashboard = self
+
+        class OneCycleVisionRunner(OmxVisionRunner):
+            cycle_completed = False
+
+            def _execute_action(
+                self, robot_xyz: tuple[float, float, float]
+            ) -> None:
+                super()._execute_action(robot_xyz)
+                self.cycle_completed = True
+                self.request_stop()
+
+        calibration = OmxCalibration.load(OMX_CALIBRATION_PATH)
+        runner = OneCycleVisionRunner(
+            model_path=self.inspection_model_path,
+            calibration=calibration,
+            config=OmxConfig(port=port),
+            target_class=None,
+            confidence=0.5,
+            camera_index=camera_index,
+            max_stage=State.HOME,
+        )
+        dashboard._integrated_loading_runner = runner
+        if self._integrated_cancel.is_set():
+            raise _ProcessCancelled
+        runner.run()
+        if not runner.cycle_completed:
+            raise RuntimeError(
+                "물체를 적재하기 전에 OMX1 비전 실행이 종료되었습니다."
+            )
+
+    def _wait_for_fresh_inspection(self) -> InspectionResult | None:
+        feed = self.cameras[CAM_INSPECTION]
+        feed.reset_inspection()
+        deadline = time.monotonic() + INSPECTION_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            self._raise_if_integrated_cancelled()
+            snapshot = feed.snapshot()
+            if not snapshot.connected or snapshot.released:
+                raise RuntimeError(snapshot.message or "검수 캠 연결이 끊겼습니다.")
+            if snapshot.inspection is not None and not snapshot.settling:
+                return snapshot.inspection
+            self._integrated_cancel.wait(INSPECTION_POLL_SEC)
+        return None
+
+    def _run_sorting_once(
+        self, port: str, inspection: InspectionResult
+    ) -> RobotStatus:
+        controller = OmxController(OmxConfig(port=port))
+        self._integrated_sorting_controller = controller
+        try:
+            controller.connect()
+            return execute_sorting_motion(controller, inspection)
+        finally:
+            try:
+                controller.disconnect()
+            except Exception:
+                pass
+            self._integrated_sorting_controller = None
+
+    def _raise_if_integrated_cancelled(self) -> None:
+        if self._integrated_cancel.is_set():
+            raise _ProcessCancelled
+
+    def _set_integrated_status(self, text: str) -> None:
+        try:
+            self.after(0, self.integrated_status_var.set, text)
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def stop_integrated_process(self) -> None:
+        if not self._integrated_is_running():
+            return
+        self._integrated_cancel.set()
+        runner = self._integrated_loading_runner
+        if runner is not None:
+            runner.request_stop()
+            # request_stop은 탐지 루프를 멈춘다. 이미 팔이 이동 중이면 공용
+            # 컨트롤러에도 요청해 다음 보간 지점에서 실제 모션을 중단한다.
+            runner.controller.request_stop()
+        controller = self._integrated_sorting_controller
+        if controller is not None:
+            controller.request_stop()
+        self.integrated_stop_button.configure(state="disabled")
+        self.integrated_status_var.set("중단 요청됨 — 현재 동작 정리 중...")
+
+    def _set_integrated_busy(self, busy: bool) -> None:
+        self.integrated_button.configure(state="disabled" if busy else "normal")
+        self.integrated_stop_button.configure(state="normal" if busy else "disabled")
+        self.omx_panel.set_external_busy(busy)
+        self.sorting_panel.set_external_busy(busy)
+        state = "disabled" if busy else "normal"
+        for button in (
+            self.dev_button,
+            self.swap_arm_button,
+            self.rescan_button,
+            self.swap_button,
+        ):
+            button.configure(state=state)
+        for combo in self.camera_combos.values():
+            idle_state = "readonly" if self._camera_devices else "disabled"
+            combo.configure(
+                state="disabled" if busy else idle_state
+            )
+
+    def _integrated_done(
+        self,
+        outcome: str,
+        completed: tuple[str, ...],
+        detail: str,
+        plan: ProcessPlan,
+    ) -> None:
+        self._integrated_thread = None
+        self.acquire_devices(TOOL_INTEGRATED)
+        self._set_integrated_busy(False)
+        completed_text = " → ".join(completed) if completed else "완료 단계 없음"
+        skipped_text = ", ".join(stage for stage, _reason in plan.skipped)
+        if outcome == "completed":
+            suffix = f" · 건너뜀: {skipped_text}" if skipped_text else ""
+            self.integrated_status_var.set(f"완료 · {completed_text}{suffix}")
+        elif outcome == "partial":
+            self.integrated_status_var.set(f"부분 완료 · {completed_text} · {detail}")
+            messagebox.showwarning("통합 공정 부분 완료", detail, parent=self)
+        elif outcome == "cancelled":
+            self.integrated_status_var.set(f"중단됨 · {completed_text}")
+        else:
+            self.integrated_status_var.set(f"실패 · {detail}")
+            messagebox.showerror("통합 공정 실패", detail, parent=self)
 
     # ------------------------------------------------------------------ 카메라 배정
 
@@ -547,7 +927,7 @@ class OperatorDashboard(tk.Tk):
             return
         self._dev_process = None
         self.acquire_devices("dev_console")
-        if self.winfo_exists():
+        if self.winfo_exists() and not self._integrated_is_running():
             self.dev_button.configure(state="normal")
 
     # ------------------------------------------------------------------ 화면 갱신
@@ -637,6 +1017,16 @@ class OperatorDashboard(tk.Tk):
     # ------------------------------------------------------------------ 종료
 
     def _on_close(self) -> None:
+        if self._integrated_is_running():
+            if messagebox.askyesno(
+                "통합 공정 실행 중",
+                "통합 공정을 중단할까요?\n"
+                "현재 로봇 동작을 안전하게 정리한 뒤 창을 다시 닫아 주세요.",
+                parent=self,
+                default=messagebox.NO,
+            ):
+                self.stop_integrated_process()
+            return
         if self._dev_process is not None and self._dev_process.poll() is None:
             messagebox.showinfo(
                 "개발 도구 실행 중", "개발 도구 창을 먼저 닫아 주세요.", parent=self
