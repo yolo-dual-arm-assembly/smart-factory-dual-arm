@@ -52,7 +52,15 @@ class MainController:
         self.machine = StateMachine()
 
     def run_cycle(self) -> RobotState:
-        """한 사이클을 실행하고 마지막 상태를 반환한다."""
+        """한 사이클을 실행하고 ``COMPLETE`` 또는 ``ERROR``를 반환한다.
+
+        성공한 이전 사이클의 ``COMPLETE``는 다음 호출을 시작할 때 ``IDLE``로
+        정리한다. 반면 실패한 ``ERROR``는 운영자가 원인을 확인한 뒤
+        :meth:`reset`을 명시적으로 호출해야 다시 시작할 수 있다.
+        """
+        if not self._prepare_cycle():
+            return self.machine.state
+
         try:
             self.machine.move_to(RobotState.LOADING)
             loading = self.load_basket()
@@ -78,6 +86,26 @@ class MainController:
             if self.machine.state is not RobotState.ERROR:
                 self.machine.fail()
             return self.machine.state
+
+    def reset(self) -> RobotState:
+        """완료 또는 오류 상태를 확인한 뒤 다음 사이클을 위해 대기로 돌린다."""
+        return self.machine.reset()
+
+    def _prepare_cycle(self) -> bool:
+        """새 사이클을 시작할 수 있는 상태인지 확인하고 성공 완료를 정리한다."""
+        if self.machine.state is RobotState.COMPLETE:
+            self.machine.reset()
+        if self.machine.state is RobotState.ERROR:
+            logger.error("오류 상태에서는 reset() 후 새 사이클을 시작해야 합니다.")
+            return False
+        if self.machine.state is not RobotState.IDLE:
+            logger.error(
+                "사이클 실행 중 새 사이클을 시작할 수 없습니다: %s",
+                self.machine.state,
+            )
+            self.machine.fail()
+            return False
+        return True
 
     def _report(self, status: RobotStatus) -> None:
         self.channel.publish(TOPIC_ROBOT_STATUS, status)

@@ -16,7 +16,7 @@ ALLOWED_TRANSITIONS: dict[RobotState, tuple[RobotState, ...]] = {
     RobotState.PASS: (RobotState.MOVING, RobotState.ERROR),
     RobotState.REJECT: (RobotState.MOVING, RobotState.ERROR),
     RobotState.MOVING: (RobotState.COMPLETE, RobotState.ERROR),
-    RobotState.COMPLETE: (RobotState.IDLE,),
+    RobotState.COMPLETE: (RobotState.IDLE, RobotState.ERROR),
     RobotState.ERROR: (RobotState.IDLE,),
 }
 
@@ -47,6 +47,8 @@ class StateMachine:
 
     def fail(self) -> RobotState:
         """어느 상태에서든 오류로 빠진다."""
+        if self.state is RobotState.ERROR:
+            return self.state
         return self.move_to(RobotState.ERROR)
 
     def reset(self) -> RobotState:
