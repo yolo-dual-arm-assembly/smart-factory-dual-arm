@@ -502,12 +502,14 @@ class OmxController:
             y: 목표 Y (미터, 로봇 좌측)
             z: 목표 Z (미터, 위쪽)
             duration: 이동 완료 후 대기 시간(초)
+
+        Raises:
+            ValueError: 목표가 도달 불가능하거나 관절 한계를 벗어날 때.
+
+        실패를 로그만 남기고 정상 반환하면 호출부가 그리퍼 개방 같은 다음 동작을
+        계속할 수 있다. IK 실패는 반드시 호출자에게 전파해 시퀀스를 중단한다.
         """
-        try:
-            angles = ik_5dof(x, y, z)
-        except ValueError as exc:
-            print(f"[OMX] IK 오류: {exc}")
-            return
+        angles = ik_5dof(x, y, z)
         print(
             f"[OMX] XYZ({x:.3f}, {y:.3f}, {z:.3f}) → "
             f"angles={[f'{math.degrees(a):.1f}°' for a in angles]}"
