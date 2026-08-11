@@ -113,7 +113,11 @@
 - **소유 패키지:** `vision_inspection`; 규격 문서는 `common`과 함께 검토
 - **현재 문제:** 문서는 `InspectionResult.from_counts()`가 판정 기준의 단일
   출처라고 설명하지만, 목표 수량 불일치 판정은 `inspection_logic.judge()`에 별도로
-  있다. 호출자가 `from_counts()`를 직접 사용하면 수량 불일치를 놓친다.
+  있다. 호출자가 `from_counts()`를 직접 사용하면 수량 불일치를 놓친다. 현재 실제
+  이미지 검사 경로(CLI·GUI)는 모두 `judge()`를 경유하므로 당장의 오판정은 없다.
+  실제 위험은 `docs/communication_protocol.md`와 `vision_inspection/README.md`가
+  여전히 `from_counts()`를 단일 출처로 안내하는 것으로, 향후 `InspectBasket`
+  서비스 서버를 그 문서대로 구현하면 수량 불일치 바구니가 PASS 판정된다.
 - **관련 코드:** `common/messages.py`, `vision_inspection/inspection_logic.py`,
   `docs/communication_protocol.md`
 - **할 일:** 판정 입력과 결과를 한 API로 통합하고, GUI·CLI·서비스·테스트가 모두
@@ -170,8 +174,11 @@
 
 - **소유 패키지:** 각 기능 패키지, 통합 시나리오는 `system_coordinator`
 - **현재 문제:** 순수 로직 테스트는 많지만 `vision_node`, `loading_node`,
-  `OmxController` 통신 실패, OMX2 PASS/REJECT 실행, 반복 coordinator 사이클을
-  직접 검증하는 테스트가 없다.
+  `OmxController` 통신 실패를 직접 검증하는 테스트가 없다. OMX2 PASS/REJECT
+  실행은 잘못된 웨이포인트의 fail-closed 시나리오 1건만 있고
+  (`tests/test_omx_waypoints.py`), 성공 경로와 `reject_motion.run()` 실행
+  테스트는 없다. 반복 coordinator 사이클은 `tests/test_main_controller.py`에
+  연속 사이클·실패 후 reset 테스트가 이미 있어 이 항목에서 제외한다.
 - **할 일:**
   - DYNAMIXEL SDK와 rclpy 경계를 fake로 교체할 수 있게 의존성을 주입한다.
   - 모터 일부 누락, 패킷 실패, cancel, timeout, 잘못된 웨이포인트를 테스트한다.
@@ -224,11 +231,15 @@
 ### [ ] 중복 코드와 광범위 예외 처리 정리
 
 - **소유 패키지:** `omx2_sorting`, `system_monitor`
-- **현재 문제:** PASS/REJECT 모션에 경로 상수 정의가 중복되어 있고 두 실행기가
-  거의 같은 JSON 해석 코드를 복제한다. GUI 여러 위치에서 광범위한
-  `except Exception`이 오류를 숨긴다.
+- **현재 문제:** JSON 해석·검증은 `omx2_sorting/waypoints.py`
+  (`load_waypoint_plan`)로 추출됐지만, `PACKAGE_ROOT`/`CONFIG_DIR` 경로 상수가
+  `pass_motion.py`, `reject_motion.py`, `teach_motion.py`, `test_motion.py`,
+  `test_motion_reject.py` 5곳에 중복 정의되어 있다. `pass_motion.py`와
+  `reject_motion.py`의 실행 루프는 PASS↔REJECT 문자열과 판정 부호 반전만 다른
+  사실상 동일 코드이고, `test_motion` 쌍도 같은 구조의 중복이다. GUI 여러
+  위치에서 광범위한 `except Exception`이 오류를 숨긴다.
 - **할 일:**
-  - OMX2 패키지 내부에 공통 웨이포인트 검증·실행기를 두고 PASS/REJECT는 경로와
+  - OMX2 패키지 내부에 공통 웨이포인트 실행기를 두고 PASS/REJECT는 경로와
     판정 방향만 제공한다.
   - 복구 가능한 예외와 프로그래밍 오류를 구분한다.
   - 무시하는 예외에는 최소한의 로그와 무시 사유를 남긴다.
