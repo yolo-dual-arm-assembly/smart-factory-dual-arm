@@ -36,8 +36,9 @@ use ROS2 interfaces, and cross-package values must follow the dataclasses in the
 convenience.
 
 `system_monitor` is the one exception: the operator GUI is an application layer,
-not a node, and must run without ROS2, so it may import `vision_inspection` and
-`omx1_loading`. The dependency only ever points GUI → node package. A node
+not a node, and must run without ROS2, so it may import node packages such as
+`vision_inspection`, `omx1_loading`, and `omx2_sorting`. The dependency only
+ever points GUI → node package. A node
 package must never import `system_monitor` — that breaks the colcon install,
 which does not ship the GUI package.
 

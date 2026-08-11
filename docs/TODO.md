@@ -131,6 +131,9 @@
 - **현재 문제:** `InspectBasket`, `LoadBalls`, `SortBasket` 인터페이스는 정의됐지만
   서버가 없다. `system_coordinator`와 `omx2_sorting`에도 ROS2 노드가 없으며,
   `loading_node`의 팔 명령은 로그 자리표시자다.
+- **선행 작업:** 서버는 각 패키지의 진입점 함수를 감싸는 얇은 래퍼로 만든다.
+  진입점 추출 4단계(분류 이동 → 검사 대기 함수 → 적재 공개 API → GUI 어댑터
+  재배선)와 와이어 매핑 규약은 `docs/ros2_migration.md` 참조.
 - **할 일:**
   - `vision_inspection`에 `InspectBasket` 서비스 서버를 구현한다.
   - `omx1_loading`에 실제 실행기를 사용하는 `LoadBalls` 액션 서버를 구현한다.
