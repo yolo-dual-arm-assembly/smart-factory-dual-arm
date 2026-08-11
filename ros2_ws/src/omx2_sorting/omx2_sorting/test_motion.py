@@ -1,8 +1,9 @@
-import json
 import time
 from pathlib import Path
 
 from common.omx_controller import OmxController
+
+from omx2_sorting.waypoints import load_waypoint_plan
 
 
 # JSON 파일 위치
@@ -23,13 +24,13 @@ def main():
         print(PASS_PATH.resolve())
         return
 
-    data = json.loads(
-        PASS_PATH.read_text(encoding="utf-8")
+    plan = load_waypoint_plan(
+        PASS_PATH,
+        expected_motion="PASS",
     )
+    sequence = plan.steps
 
-    sequence = data["sequence"]
-
-    print(f"Motion: {data['motion']}")
+    print(f"Motion: {plan.motion}")
     print(f"Step 개수: {len(sequence)}")
 
     # --------------------------------------------------
@@ -38,7 +39,7 @@ def main():
     print("\n실행 순서:")
 
     for index, step in enumerate(sequence, start=1):
-        print(f"{index}. {step['action']}")
+        print(f"{index}. {step.action}")
 
     confirm = input(
         "\n실제 OMX2를 움직입니다. 실행할까요? (y/n): "
@@ -69,7 +70,7 @@ def main():
         # --------------------------------------------------
         for index, step in enumerate(sequence, start=1):
 
-            action = step["action"]
+            action = step.action
 
             print(
                 f"\n[Step {index}/{len(sequence)}] "
@@ -80,41 +81,27 @@ def main():
             # MOVE
             # ------------------------------
             if action == "move":
-
-                angles = step["angles"]
-                duration = step.get("duration", 2.0)
+                assert step.angles is not None
 
                 controller.move_joints_smooth(
-                    angles,
-                    duration=duration,
+                    step.angles,
+                    duration=step.duration,
                 )
 
             # ------------------------------
             # GRIPPER CLOSE
             # ------------------------------
             elif action == "gripper_close":
-
-                duration = step.get("duration", 1.0)
-
                 controller.gripper_close(
-                    duration=duration
+                    duration=step.duration
                 )
 
             # ------------------------------
             # GRIPPER OPEN
             # ------------------------------
             elif action == "gripper_open":
-
-                duration = step.get("duration", 1.0)
-
                 controller.gripper_open(
-                    duration=duration
-                )
-
-            else:
-                print(
-                    f"[WARNING] 알 수 없는 action: "
-                    f"{action}"
+                    duration=step.duration
                 )
 
             # 각 Step 사이 잠깐 대기

@@ -52,6 +52,28 @@ def test_reject_result_still_reaches_sorting() -> None:
     assert RobotState.REJECT in controller.machine.history
 
 
+def test_same_controller_runs_consecutive_cycles() -> None:
+    inspections = iter(
+        (
+            InspectionResult.from_counts(3, 0),
+            InspectionResult.from_counts(3, 1),
+        )
+    )
+    controller = MainController(
+        load_basket=loading_ok,
+        inspect=lambda: next(inspections),
+        sort_basket=sorting_ok,
+    )
+
+    assert controller.run_cycle() is RobotState.COMPLETE
+    assert controller.run_cycle() is RobotState.COMPLETE
+    assert controller.machine.history.count(RobotState.COMPLETE) == 2
+    assert controller.machine.history.count(RobotState.LOADING) == 2
+    assert RobotState.IDLE in controller.machine.history[1:]
+    assert RobotState.PASS in controller.machine.history
+    assert RobotState.REJECT in controller.machine.history
+
+
 def test_failed_loading_stops_the_cycle_in_error() -> None:
     controller = MainController(
         load_basket=lambda: RobotStatus(
@@ -63,6 +85,37 @@ def test_failed_loading_stops_the_cycle_in_error() -> None:
 
     assert controller.run_cycle() is RobotState.ERROR
     assert RobotState.INSPECTING not in controller.machine.history
+
+
+def test_failed_cycle_requires_explicit_reset_before_retry() -> None:
+    loading_attempts = 0
+
+    def fail_once() -> RobotStatus:
+        nonlocal loading_attempts
+        loading_attempts += 1
+        return RobotStatus(
+            RobotId.LOADING,
+            (
+                RobotState.ERROR
+                if loading_attempts == 1
+                else RobotState.LOADING_COMPLETE
+            ),
+            success=loading_attempts > 1,
+        )
+
+    controller = MainController(
+        load_basket=fail_once,
+        inspect=lambda: InspectionResult.from_counts(3, 0),
+        sort_basket=sorting_ok,
+    )
+
+    assert controller.run_cycle() is RobotState.ERROR
+    assert controller.run_cycle() is RobotState.ERROR
+    assert loading_attempts == 1
+
+    assert controller.reset() is RobotState.IDLE
+    assert controller.run_cycle() is RobotState.COMPLETE
+    assert loading_attempts == 2
 
 
 def test_subscriber_receives_messages_published_before_subscribing() -> None:

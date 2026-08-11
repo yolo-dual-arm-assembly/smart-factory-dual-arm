@@ -5,13 +5,16 @@ import math
 import pytest
 
 from common.omx_controller import (
+    JOINT_LIMITS,
     PROFILE_VELOCITY,
     GRIPPER_CLOSE_POS,
     GRIPPER_OPEN_POS,
     OmxConfig,
+    OmxController,
     ik_5dof,
     fk_5dof,
     interpolate_joint_angles,
+    validate_joint_angles,
     gripper_percent_to_dxl,
     angle_to_dxl,
     dxl_to_angle,
@@ -22,8 +25,11 @@ from common.omx_controller import (
 )
 from omx1_loading.coordinate_transform import OmxCalibration, make_full_frame_calibration
 from omx1_loading.pick_ball import (
+    OmxVisionRunner,
+    State,
     is_safe_approach_target,
     validate_calibration_workspace,
+    validate_pick_place_plan,
 )
 
 
@@ -91,12 +97,74 @@ class TestAngleConversion:
         assert 0 <= angle_to_dxl(10.0) <= 4095
         assert 0 <= angle_to_dxl(-10.0) <= 4095
 
+    def test_quantized_joint_limits_stay_inside_soft_limits(self) -> None:
+        """경계 각도를 모터 단위로 바꿔도 소프트 리밋 밖으로 나가지 않는다."""
+        for lower, upper in JOINT_LIMITS:
+            quantized_lower = dxl_to_angle(angle_to_dxl(lower))
+            quantized_upper = dxl_to_angle(angle_to_dxl(upper))
+
+            assert lower <= quantized_lower <= upper
+            assert lower <= quantized_upper <= upper
+
 
 class TestOmxConfig:
     def test_default_profile_velocity_is_slow_and_limited(self) -> None:
         """GUI 홈 이동은 제한 없는 속도(0)나 고속 값을 사용하지 않는다."""
         assert PROFILE_VELOCITY == 30
         assert OmxConfig().profile_velocity == PROFILE_VELOCITY
+
+
+class TestOmxControllerFailurePropagation:
+    def test_move_xyz_propagates_unreachable_target(self) -> None:
+        controller = OmxController()
+
+        with pytest.raises(ValueError, match="도달 불가능"):
+            controller.move_xyz(1.0, 0.0, 0.0)
+
+
+class TestJointSoftLimits:
+    def test_accepts_inclusive_joint_boundaries(self) -> None:
+        lower = [limit[0] for limit in JOINT_LIMITS]
+        upper = [limit[1] for limit in JOINT_LIMITS]
+
+        assert validate_joint_angles(lower) == lower
+        assert validate_joint_angles(upper) == upper
+
+    @pytest.mark.parametrize("joint_index", range(5))
+    @pytest.mark.parametrize("side", ["lower", "upper"])
+    def test_identifies_joint_outside_limit(
+        self,
+        joint_index: int,
+        side: str,
+    ) -> None:
+        angles = [0.0] * 5
+        limit = JOINT_LIMITS[joint_index][0 if side == "lower" else 1]
+        angles[joint_index] = limit + (-0.001 if side == "lower" else 0.001)
+
+        with pytest.raises(ValueError, match=rf"Joint {joint_index + 1} 한계 초과"):
+            validate_joint_angles(angles)
+
+    @pytest.mark.parametrize("invalid", [math.nan, math.inf, -math.inf])
+    def test_rejects_non_finite_angle(self, invalid: float) -> None:
+        angles = [0.0] * 5
+        angles[2] = invalid
+
+        with pytest.raises(ValueError, match="Joint 3.*유한한 숫자"):
+            validate_joint_angles(angles)
+
+    def test_direct_move_rejects_target_before_connection(self) -> None:
+        controller = OmxController()
+
+        with pytest.raises(ValueError, match="Joint 2 한계 초과"):
+            controller.move_joints([0.0, math.pi, 0.0, 0.0, 0.0])
+
+    def test_smooth_move_rejects_target_before_connection(self) -> None:
+        controller = OmxController()
+
+        with pytest.raises(ValueError, match="Joint 4 한계 초과"):
+            controller.move_joints_smooth(
+                [0.0, 0.0, 0.0, math.pi, 0.0],
+            )
 
 
 class TestGripperConversion:
@@ -229,3 +297,52 @@ class TestVisionSafety:
 
         with pytest.raises(ValueError, match="다시 설정"):
             validate_calibration_workspace(cal)
+
+    def test_rejects_place_position_outside_workspace(self) -> None:
+        cal = OmxCalibration(place_pos=(1.0, 0.0))
+
+        with pytest.raises(ValueError, match="배치 접근 목표가 작업 영역 밖"):
+            validate_calibration_workspace(cal)
+
+    def test_rejects_unreachable_place_height(self) -> None:
+        cal = OmxCalibration(place_pos=(0.2, 0.0), place_z=1.0)
+
+        with pytest.raises(ValueError, match="배치 목표를 실행할 수 없습니다"):
+            validate_calibration_workspace(cal)
+
+    def test_full_plan_is_validated_before_first_robot_command(self) -> None:
+        class RecordingController:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def move_joints_smooth(self, *_args, **_kwargs) -> None:
+                self.commands.append("move_joints_smooth")
+
+            def move_xyz(self, *_args, **_kwargs) -> None:
+                self.commands.append("move_xyz")
+
+            def gripper_close(self, *_args, **_kwargs) -> None:
+                self.commands.append("gripper_close")
+
+            def gripper_open(self, *_args, **_kwargs) -> None:
+                self.commands.append("gripper_open")
+
+            def home(self, *_args, **_kwargs) -> None:
+                self.commands.append("home")
+
+        calibration = OmxCalibration(pick_z=1.0)
+        controller = RecordingController()
+        runner = object.__new__(OmxVisionRunner)
+        runner.calibration = calibration
+        runner.controller = controller
+        runner.max_stage = State.HOME
+
+        with pytest.raises(ValueError, match="물체 집기 목표를 실행할 수 없습니다"):
+            runner._execute_action((0.2, 0.0, calibration.pick_z))
+
+        assert controller.commands == []
+
+    def test_valid_pick_place_plan_passes(self) -> None:
+        calibration = OmxCalibration()
+
+        validate_pick_place_plan((0.2, 0.0, calibration.pick_z), calibration)

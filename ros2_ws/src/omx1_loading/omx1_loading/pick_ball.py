@@ -57,12 +57,44 @@ def is_safe_approach_target(x: float, y: float, z: float) -> bool:
     return is_in_safe_rectangle(x, y) and is_reachable(x, y, z)
 
 
+def validate_motion_target(label: str, x: float, y: float, z: float) -> None:
+    """실행할 XYZ 한 점이 작업 영역과 관절 한계를 모두 만족하는지 확인한다."""
+    if not is_in_safe_rectangle(x, y):
+        raise ValueError(
+            f"{label} 목표가 작업 영역 밖입니다: "
+            f"XYZ=({x:.3f}, {y:.3f}, {z:.3f})m"
+        )
+    try:
+        ik_5dof(x, y, z)
+    except ValueError as error:
+        raise ValueError(
+            f"{label} 목표를 실행할 수 없습니다: "
+            f"XYZ=({x:.3f}, {y:.3f}, {z:.3f})m — {error}"
+        ) from error
+
+
+def validate_pick_place_plan(
+    robot_xyz: tuple[float, float, float], calibration: OmxCalibration
+) -> None:
+    """Pick & Place의 모든 이동 목표를 첫 모터 명령 전에 검증한다."""
+    rx, ry, _ = robot_xyz
+    px, py = calibration.place_pos
+    targets = (
+        ("물체 접근", rx, ry, calibration.approach_z),
+        ("물체 집기", rx, ry, calibration.pick_z),
+        ("배치 접근", px, py, calibration.approach_z),
+        ("배치", px, py, calibration.place_z),
+    )
+    for label, x, y, z in targets:
+        validate_motion_target(label, x, y, z)
+
+
 def validate_calibration_workspace(calibration: OmxCalibration) -> None:
     """캘리브레이션 좌표의 단위와 OMX 작업 영역을 확인한다.
 
     작업 사각형은 팔이 실제로 그리는 영역보다 넓다. 사각형의 네 모서리는
-    역기구학으로 도달하지 못하므로 사각형 검사만으로는 부족하고, 실제로 쓸
-    두 높이(접근·집기)에서 해가 나오는지까지 확인한다.
+    역기구학으로 도달하지 못하므로 사각형 검사만으로는 부족하다. 캘리브레이션
+    대응점의 접근·집기 높이와 배치점의 접근·놓기 높이에서 해가 나오는지 확인한다.
     """
     outside_rectangle = [
         (x, y) for x, y in calibration.robot_points if not is_in_safe_rectangle(x, y)
@@ -93,6 +125,10 @@ def validate_calibration_workspace(calibration: OmxCalibration) -> None:
             f"{formatted}. 사각형 모서리 쪽은 팔이 닿지 않으므로 로봇에 더 "
             "가까운 지점으로 다시 잡으세요."
         )
+
+    px, py = calibration.place_pos
+    validate_motion_target("배치 접근", px, py, calibration.approach_z)
+    validate_motion_target("배치", px, py, calibration.place_z)
 
 
 class State(Enum):
@@ -294,8 +330,13 @@ class OmxVisionRunner:
 
     def _execute_action(self, robot_xyz: tuple[float, float, float]) -> None:
         """탐지 위치에 따른 로봇 동작을 실행한다 (max_stage까지)."""
-        rx, ry, rz = robot_xyz
+        rx, ry, _ = robot_xyz
         cal = self.calibration
+
+        # 중간에 도달 불가능한 점을 발견하면 이미 물체를 집은 뒤일 수 있다.
+        # 전체 경로를 먼저 확인해 실패 시 모터 명령과 그리퍼 동작을 하나도
+        # 보내지 않는다.
+        validate_pick_place_plan(robot_xyz, cal)
 
         # 1. APPROACH: 물체 위 접근 높이로 이동
         self._state = State.APPROACH

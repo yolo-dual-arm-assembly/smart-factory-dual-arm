@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from common.camera import open_camera
@@ -226,6 +226,22 @@ class CameraFeed:
         """탐지 박스가 없는 최신 원본 프레임(스냅샷용)."""
         with self._lock:
             return self._raw_frame
+
+    def reset_inspection(self) -> None:
+        """이전 확정 판정을 버리고 새로 안정화된 검사 결과를 기다린다.
+
+        통합 공정은 적재 전에 보이던 바구니 판정으로 OMX2를 움직이면 안 된다.
+        캡처와 추론은 계속 유지하고 판정 게이트만 비워 다음 프레임들로 다시
+        확정하게 한다.
+        """
+        with self._lock:
+            if self._stabilizer is not None:
+                self._stabilizer.reset()
+            self._snapshot = replace(
+                self._snapshot,
+                inspection=None,
+                settling=self._model_path is not None,
+            )
 
     def _store(self, snapshot: CameraSnapshot) -> None:
         with self._lock:

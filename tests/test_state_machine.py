@@ -34,3 +34,11 @@ def test_error_is_reachable_from_working_states() -> None:
 
     assert machine.fail() is RobotState.ERROR
     assert machine.reset() is RobotState.IDLE
+
+
+@pytest.mark.parametrize("state", tuple(RobotState))
+def test_fail_is_safe_from_every_state(state: RobotState) -> None:
+    machine = StateMachine(state)
+
+    assert machine.fail() is RobotState.ERROR
+    assert machine.fail() is RobotState.ERROR
