@@ -14,6 +14,7 @@
 | `training.py` | 학습 설정 검증과 실행 |
 | `train.py` | 학습 CLI |
 | `detect.py` | 웹캠 실시간 탐지 CLI |
+| `coco_import.py` | COCO 샘플을 ball/others 학습 세션으로 변환하는 CLI |
 | `config/data.yaml` | 데이터셋 정의 (이미지·라벨은 루트 `train_set/`) |
 
 ## 실행
@@ -22,6 +23,16 @@
 python -m vision_inspection.train --epochs 100 --batch 16
 python -m vision_inspection.detect --model yolov8n.pt
 python -m vision_inspection.inspection_logic --source object/test.jpg
+python -m vision_inspection.coco_import --count 400   # train_set/coco_others 생성
+```
+
+`coco_import`는 COCO val2017을 미리 받아 둬야 합니다(1회, 약 1GB):
+
+```bash
+mkdir -p train_set/coco_src && cd train_set/coco_src
+wget http://images.cocodataset.org/zips/val2017.zip && unzip val2017.zip
+wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip \
+    && unzip annotations_trainval2017.zip
 ```
 
 ## 규격 (바꾸려면 통합 담당자와 합의)
