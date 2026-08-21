@@ -31,8 +31,9 @@ from common.omx_controller import OmxController, OmxConfig, ik_5dof
 
 
 # 첫 비전 연동 시험에서 허용할 보수적인 작업 영역(로봇 베이스 기준, m)
-SAFE_X_RANGE = (0.10, 0.25)
-SAFE_Y_RANGE = (-0.15, 0.15)
+# 실측(그리퍼를 화면 네 모서리에 대고 GUI XYZ 판독): X -17.1~4.2cm, Y -33.4~-14.5cm
+SAFE_X_RANGE = (-0.20, 0.06)
+SAFE_Y_RANGE = (-0.36, -0.12)
 
 
 def is_in_safe_rectangle(x: float, y: float) -> bool:
@@ -73,7 +74,8 @@ def validate_calibration_workspace(calibration: OmxCalibration) -> None:
         )
         raise ValueError(
             "캘리브레이션 로봇 좌표가 작업 영역 밖입니다: "
-            f"{formatted}. X=10~25cm, Y=-15~15cm로 다시 설정하세요."
+            f"{formatted}. X={SAFE_X_RANGE[0] * 100:.0f}~{SAFE_X_RANGE[1] * 100:.0f}cm, "
+            f"Y={SAFE_Y_RANGE[0] * 100:.0f}~{SAFE_Y_RANGE[1] * 100:.0f}cm로 다시 설정하세요."
         )
 
     work_heights = (calibration.approach_z, calibration.pick_z)
