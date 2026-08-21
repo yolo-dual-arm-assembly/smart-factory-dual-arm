@@ -6,9 +6,8 @@ COCO val2017 이미지 일부를 샘플링해 sports ball은 ball(0)로, 나머�
 보인 물체를 others로 잡는 일반화 성능(other_val 지표)을 올리는 용도다.
 
 기본 사용(레포 루트에서 실행):
-    python -m vision_inspection.coco_import                # val2017에서 400장
-    python -m vision_inspection.coco_import --count 800    # 더 많이 샘플링
-    python -m vision_inspection.coco_import --force        # 기존 세션 대체
+    python -m vision_inspection.coco_import                       # val2017에서 800장
+    python -m vision_inspection.coco_import --count 1500 --force  # 더 많이 + 재생성
 
 1회 준비 — COCO val2017을 받아 둔다(약 1GB, train_set/*라 git이 무시한다):
     mkdir -p train_set/coco_src && cd train_set/coco_src
@@ -39,9 +38,10 @@ DEFAULT_ANNOTATIONS = DEFAULT_COCO_DIR / "annotations" / "instances_val2017.json
 DEFAULT_IMAGES_DIR = DEFAULT_COCO_DIR / "val2017"
 DEFAULT_OUTPUT_DIR = TRAIN_SET_DIR / "coco_others"
 
-# val2017은 이미지당 평균 ~7개 물체라 400장이면 others 인스턴스가 기존
-# 촬영분(약 2,600개)과 비슷하게 늘고, ball(약 6,200개)은 넘지 않는다.
-DEFAULT_COUNT = 400
+# val2017은 이미지당 평균 ~7개 물체다. 800장이면 others 인스턴스가 약 5,700개
+# 추가돼 촬영분(약 2,600개)과 합쳐 ball(약 6,200개)을 조금 넘는 수준이 된다.
+# 풀 전체(약 4,900장)까지 올릴 수는 있지만 others가 ball을 크게 압도하게 된다.
+DEFAULT_COUNT = 800
 DEFAULT_SEED = 0
 
 # COCO는 공을 'ball'이 아니라 'sports ball'이라고 부른다. 매핑 결과 클래스

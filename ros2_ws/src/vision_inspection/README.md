@@ -23,7 +23,7 @@
 python -m vision_inspection.train --epochs 100 --batch 16
 python -m vision_inspection.detect --model yolov8n.pt
 python -m vision_inspection.inspection_logic --source object/test.jpg
-python -m vision_inspection.coco_import --count 400   # train_set/coco_others 생성
+python -m vision_inspection.coco_import               # train_set/coco_others 생성(기본 800장)
 ```
 
 `coco_import`는 COCO val2017을 미리 받아 둬야 합니다(1회, 약 1GB):
