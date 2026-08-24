@@ -8,6 +8,8 @@
 | 파일 | 역할 |
 |---|---|
 | `inspection_logic.py` | 바구니 검사 → `InspectionResult` (coordinator가 쓰는 진입점) |
+| `class_scheme.py` | 검사 클래스 스킴 로드·검증 (`config/class_scheme.yaml`) |
+| `stability.py` | 판정 안정화 게이트 — 개수가 흔들리는 동안 확정을 미룸 |
 | `vision_node.py` | ROS2 노드: 이미지 토픽 구독 → 추론 → `/yolo/detection` 발행 |
 | `analysis.py` | 이미지 폴더 일괄 추론 루프 (GUI가 사용) |
 | `models.py` | 사용 가능한 모델 목록과 다운로드 |
@@ -15,7 +17,9 @@
 | `train.py` | 학습 CLI |
 | `detect.py` | 웹캠 실시간 탐지 CLI |
 | `coco_import.py` | COCO 샘플을 ball/others 학습 세션으로 변환하는 CLI |
-| `config/data.yaml` | 데이터셋 정의 (이미지·라벨은 루트 `train_set/`) |
+| `colab.py` / `hf_upload.py` | Colab Drive 도우미 / 학습 결과 Hugging Face 업로드 |
+| `notebooks/train_colab.ipynb` | Colab GPU 학습 노트북 (데이터 준비→학습→업로드) |
+| `config/` | `data.yaml`(데이터셋 정의), `class_scheme.yaml`(검사 기준) |
 
 ## 실행
 
@@ -48,7 +52,9 @@ InspectionResult.from_counts(total_count=3, defect_count=0)
 
 ## 남은 일
 
-- `BALL_CLASS_NAMES`, `DEFECT_CLASS_NAMES`를 실제 학습 데이터셋 클래스 이름으로
-  교체합니다.
-- 학습된 `best.pt`는 Git에 올리지 않습니다. Release나 공유 드라이브로 전달하고
-  레포 루트의 `models/`에 두면 GUI 모델 목록에 나타납니다.
+- 운영 신뢰도 임계값을 학습된 모델에 맞게 올립니다. `common/constants.py`의
+  `CONFIDENCE_THRESHOLD = 0.1`은 사전학습 COCO 모델용으로 낮춘 값이라, 직접
+  학습한 `best.pt`에서는 저신뢰 오탐이 REJECT 오판정으로 이어질 수 있습니다.
+  적정값은 val 결과의 `F1_curve.png`로 확인합니다.
+- 학습된 `best.pt`는 Git에 올리지 않습니다. Colab 노트북 9번 셀(Hugging Face
+  업로드)로 전달하고, 레포 루트의 `models/`에 두면 GUI 모델 목록에 나타납니다.

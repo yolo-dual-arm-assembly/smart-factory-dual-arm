@@ -35,7 +35,7 @@ ROS2 인터페이스로만 데이터를 주고받는다.
 | 패키지 | 담당 | 현재 들어 있는 것 |
 |---|---|---|
 | `project_interfaces` | 5번 | `msg/DetectionResult.msg`, `srv/InspectBasket.srv`, `action/LoadBalls.action`, `action/SortBasket.action` |
-| `vision_inspection` | 1·2번 | `vision_node.py`(ROS2 노드), `inspection_logic.py`, `analysis.py`, `models.py`, `training.py`, `train.py`, `detect.py`, `config/data.yaml` |
+| `vision_inspection` | 1·2번 | `vision_node.py`(ROS2 노드), `inspection_logic.py`, `class_scheme.py`, `stability.py`, `analysis.py`, `models.py`, `training.py`, `train.py`, `detect.py`, `coco_import.py`, `colab.py`, `hf_upload.py`, `notebooks/`(Colab 학습), `config/`(data.yaml·class_scheme.yaml) |
 | `omx1_loading` | 3번 | `loading_node.py`(ROS2 노드), `coordinate_transform.py`, `camera_calibration.py`, `pick_ball.py`, `imitation_control.py`, `teaching.py`, `teaching_window.py`, CLI 2개 |
 | `omx2_sorting` | 4번 | `move_basket.py`, `pass_motion.py`, `reject_motion.py` (뼈대) |
 | `system_coordinator` | 5번 | `main_controller.py`, `state_machine.py`, `communication.py` |
@@ -43,8 +43,10 @@ ROS2 인터페이스로만 데이터를 주고받는다.
 | `common` | 5번 | `constants.py`, `messages.py`, `logger.py`, `camera.py`, `serial_ports.py`, `omx_controller.py`, `bootstrap.py` |
 
 `vision_inspection` 안에서 1번(모델 학습·데이터셋)과 2번(카메라·검사 서비스)이
-파일 단위로 나뉜다. 학습 쪽은 `train.py`·`training.py`·`models.py`, 검사 쪽은
-`vision_node.py`·`inspection_logic.py`다.
+파일 단위로 나뉜다. 학습 쪽은 `train.py`·`training.py`·`models.py`·
+`coco_import.py`(COCO 혼합 세션 생성)와 Colab 학습 지원(`colab.py`·
+`hf_upload.py`·`notebooks/`), 검사 쪽은 `vision_node.py`·`inspection_logic.py`·
+`class_scheme.py`·`stability.py`다.
 
 ## ROS2 노드 상태
 
