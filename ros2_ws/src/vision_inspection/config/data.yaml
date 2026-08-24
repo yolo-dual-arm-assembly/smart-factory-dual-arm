@@ -26,6 +26,10 @@ train:
   - ../../../../train_set/other3/images/train
   - ../../../../train_set/other4/images/train
   - ../../../../train_set/other5/images/train
+  # coco_others: COCO val2017 샘플(sports ball→ball, 나머지→others) — others 일반화용.
+  # python -m vision_inspection.coco_import로 생성. 도메인이 달라 val 추출은 일부러
+  # 안 한다(일반화 측정은 other_val이 담당).
+  - ../../../../train_set/coco_others/images/train
 val: ../../../../train_set/val/images
 
 names:
