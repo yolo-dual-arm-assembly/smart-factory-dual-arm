@@ -12,16 +12,22 @@ Explore 에이전트 3개로 코드베이스 전체를 병렬 조사해 작성�
 
 ## 우선순위 요약
 
-가장 먼저 손대면 좋은 항목 5개 — 노력 대비 효과가 크고, 대부분 공유 변경이
-필요 없다.
+**2026-08-24 갱신:** 최우선 항목이던 `omx2_sorting` PASS/REJECT 러너 중복 제거를
+`feat/omx2-sorting` 브랜치에서 완료해 `dev`에 병합했다(PR #14). 자세한 내용은
+[omx2_sorting #1](#1-packageroot--configdir--passreject-러너가-5개-파일에-중복-완료-2026-08-24)
+참고. 아래는 그다음으로 손대면 좋은 항목들이다 — 노력 대비 효과가 크고, 대부분
+공유 변경이 필요 없다.
 
 | 항목 | 담당 패키지 | 노력 | 왜 먼저인가 |
 |---|---|---|---|
-| `omx2_sorting` PASS/REJECT 러너 중복 제거 ([omx2_sorting #1](#1-packageroot--configdir--passreject-러너가-5개-파일에-중복)) | omx2_sorting | M | 79% 동일한 코드 2벌 + 5개 파일에 중복된 경로 상수. 최고 ROI |
-| `common`에 `OMX2_CONFIG_DIR` 추가 ([common #1](#1-commonconstantspy에-omx2configdir-없음)) | common | S | 위 중복의 근본 원인. 작고 additive해서 합의 얻기 쉬움 |
-| `omx2_sorting/README.md` 상태 갱신 ([omx2_sorting #2](#2-omx2sortingreadmemd가-완성된-코드를-미구현으로-문서화)) | omx2_sorting | S | 10분 작업, 완성된 코드를 미구현으로 오인하게 하는 혼란을 즉시 차단 |
-| `RobotState` enum 사용, raw 문자열 제거 ([omx2_sorting #6](#6-손으로-쓴-passreject-문자열-robotstate-enum-미사용)) / `common.camera.open_camera()` 사용 ([omx1_loading #4](#4-pick_ballpyrun_vision_pickpy가-commoncameraopen_camera를-우회)) | omx2_sorting, omx1_loading | S 각각 | 둘 다 공유 합의 불필요, 실제 동작 차이를 만드는 잠재적 버그 제거 |
-| `webcam.py`/`camera_feed.py` 캡처 엔진 통합 ([system_monitor #1](#1-webcampy-vs-camera_feedpy--캡처추론-엔진-중복)) | system_monitor | M | 문자 그대로 복붙된 코드(FPS 계산식 4곳 중복), 버그 수정이 한쪽에만 반영될 위험 |
+| system_monitor 죽은 코드 3종 정리 ([#3](#3-webcampy-미사용-import)·[#4](#4-죽은-클래스-armmonitorgroup)·[#5](#5-죽은-매개변수-omxpanelrequest_closeon_ready)) | system_monitor | XS 각각 | 셋 다 몇 분짜리 삭제, 위험 0. 방금 omx2_sorting에서 한 것처럼 한 세션에 바로 처리 가능 |
+| `common.camera.open_camera()` 사용 ([omx1_loading #5](#5-pick_ballpyrun_vision_pickpy가-commoncameraopen_camera를-우회)) | omx1_loading | S | 픽업 경로와 교시/모방 경로에서 카메라가 실제로 다르게 동작하는 잠재 버그 제거, 공유 합의 불필요 |
+| `RobotState` enum 사용, raw 문자열 제거 ([omx2_sorting #5](#5-손으로-쓴-passreject-문자열-robotstate-enum-미사용)) | omx2_sorting | S | 방금 손댄 `motion_runner.py`/`waypoints.py`와 같은 영역이라 맥락을 유지한 채 이어서 하기 좋음 |
+| `webcam.py`/`camera_feed.py` 캡처 엔진 통합 ([system_monitor #1](#1-webcampy-vs-camera_feedpy--캡처추론-엔진-중복)) | system_monitor | M | 문자 그대로 복붙된 코드(FPS 계산식 4곳 중복), 버그 수정이 한쪽에만 반영될 위험 — 가장 큰 단일 임팩트 |
+
+`common`에 `OMX2_CONFIG_DIR` 추가([common #1](#1-commonconstantspy에-omx2configdir이-없음))는
+omx2_sorting #1이 패키지 로컬로 이미 중복을 해소해서 긴급도가 낮아졌다 — 자세한
+내용은 해당 섹션 참고.
 
 ---
 
@@ -222,19 +228,17 @@ Explore 에이전트 3개로 코드베이스 전체를 병렬 조사해 작성�
 
 ## omx2_sorting
 
-### 1. `PACKAGE_ROOT`/`CONFIG_DIR` + PASS/REJECT 러너가 5개 파일에 중복
+### 1. `PACKAGE_ROOT`/`CONFIG_DIR` + PASS/REJECT 러너가 5개 파일에 중복 — ✅ 완료 (2026-08-24)
 
-- **위치:** `pass_motion.py:20-21,25-147`, `reject_motion.py:17-18,22-138`, `test_motion.py:10-12,15-124`, `test_motion_reject.py:9-11,14-104`, `teach_motion.py:8-9`
-- **문제:** `PACKAGE_ROOT = Path(__file__).resolve().parent.parent; CONFIG_DIR = PACKAGE_ROOT / "config"`가 5개 파일에 그대로 재입력돼 있다. `pass_motion.run()`/`reject_motion.run()`은 **79% 줄이 동일**(difflib 검증, 147줄 중 113줄 일치 — PASS↔REJECT 문자열과 `inspection.is_pass` 방향만 다름). `test_motion.py`/`test_motion_reject.py`는 같은 루프를 더 허술하게 복사한 것(56% 일치)인데 `InspectionResult` 게이트를 아예 건너뛴다.
-- **개선 방향:** `omx2_sorting/motion_runner.py`에 `run_motion(controller, inspection, *, expect_pass, path) -> RobotStatus`를 만들고 `pass_motion.py`/`reject_motion.py`를 10줄짜리 래퍼로 축소. `test_motion.py`/`test_motion_reject.py`는 삭제하고 단일 `--motion pass|reject` 드라이런 CLI로 대체(파일명도 `test_*`라 pytest collection과 헷갈리므로 개명 필요).
-- **노력:** M · **범위:** 패키지 로컬(단, `PACKAGE_ROOT`/`CONFIG_DIR` 중복의 근본 원인은 아래 [common #1](#1-commonconstantspy에-omx2configdir-없음))
+- **위치(당시):** `pass_motion.py:20-21,25-147`, `reject_motion.py:17-18,22-138`, `test_motion.py:10-12,15-124`, `test_motion_reject.py:9-11,14-104`, `teach_motion.py:8-9`
+- **문제(당시):** `PACKAGE_ROOT = Path(__file__).resolve().parent.parent; CONFIG_DIR = PACKAGE_ROOT / "config"`가 5개 파일에 그대로 재입력돼 있다. `pass_motion.run()`/`reject_motion.run()`은 **79% 줄이 동일**(difflib 검증, 147줄 중 113줄 일치 — PASS↔REJECT 문자열과 `inspection.is_pass` 방향만 다름). `test_motion.py`/`test_motion_reject.py`는 같은 루프를 더 허술하게 복사한 것(56% 일치)인데 `InspectionResult` 게이트를 아예 건너뛴다.
+- **완료 기록 (2026-08-24):** `omx2_sorting/motion_runner.py`를 신설해 `run_motion(controller, inspection, *, expect_pass, path) -> RobotStatus`로 공통 실행 절차를 통합했다. `pass_motion.py`/`reject_motion.py`는 147·138줄에서 각각 16줄짜리 래퍼로 축소. `PACKAGE_ROOT`/`CONFIG_DIR`/`PASS_PATH`/`REJECT_PATH`는 `motion_runner.py` 한 곳에만 정의하고 `teach_motion.py`도 거기서 import하도록 변경. `test_motion.py`/`test_motion_reject.py`(안전 게이트를 건너뛰던 56%짜리 복사본)는 삭제하고 `manual_motion_check.py --motion pass|reject`로 대체 — 프로덕션과 동일한 `run_motion()`을 그대로 호출하므로 REJECT 쪽의 duration 하드코딩 버그도 함께 사라졌다. 기존 `tests/test_omx_waypoints.py`는 손대지 않고 그대로 통과해 동작 보존을 확인했고, `tests/test_omx_motion_runner.py`를 새로 추가했다([omx2_sorting #8](#8-테스트-커버리지-갭-완료-2026-08-24) 참고). `feat/omx2-sorting` → `dev` 병합(PR #14).
 
-### 2. `omx2_sorting/README.md`가 완성된 코드를 미구현으로 문서화
+### 2. `omx2_sorting/README.md`가 완성된 코드를 미구현으로 문서화 — ✅ 완료 (2026-08-24)
 
 - **위치:** `omx2_sorting/README.md` 상태 표
-- **문제:** `pass_motion.py`/`reject_motion.py`를 "구현 필요"로 표시하지만 둘 다 검증·토크 제어·안전 종료 처리가 딸린 완성된 117-123줄짜리 함수다. 진짜 스텁은 `move_basket.py`(아래 3번)뿐인데 README가 구분을 안 한다.
-- **개선 방향:** 상태 열을 실제 상태(`move_to_inspection()`만 미구현)에 맞게 갱신.
-- **노력:** S · **범위:** 패키지 로컬
+- **문제(당시):** `pass_motion.py`/`reject_motion.py`를 "구현 필요"로 표시하지만 둘 다 검증·토크 제어·안전 종료 처리가 딸린 완성된 117-123줄짜리 함수다. 진짜 스텁은 `move_basket.py`(아래 3번)뿐인데 README가 구분을 안 한다.
+- **완료 기록 (2026-08-24):** 상태 표를 실제 상태로 갱신하고 `motion_runner.py`·`manual_motion_check.py`·`waypoints.py`·`teach_motion.py` 행을 추가했다. `move_to_inspection()`만 "구현 필요"로 정확히 남겨 뒀다.
 
 ### 3. `move_basket.move_to_inspection()`은 진짜 스캐폴드
 
@@ -252,29 +256,30 @@ Explore 에이전트 3개로 코드베이스 전체를 병렬 조사해 작성�
 
 ### 5. 손으로 쓴 `"PASS"`/`"REJECT"` 문자열, `RobotState` enum 미사용
 
-- **위치:** `waypoints.py:47`(`load_waypoint_plan(path, *, expected_motion: str)` — `str` 타입), 호출부 `pass_motion.py:56`, `reject_motion.py:53`, `test_motion.py:29`, `test_motion_reject.py:24`, `teach_motion.py:22,25`
+- **위치:** `waypoints.py:47`(`load_waypoint_plan(path, *, expected_motion: str)` — `str` 타입), 호출부 `pass_motion.py`, `reject_motion.py`, `motion_runner.py`, `teach_motion.py:22,25`(2026-08-24 리팩토링 이후 위치 갱신 — `test_motion.py`/`test_motion_reject.py`는 삭제됨)
 - **문제:** `common.constants.RobotState.PASS`/`.REJECT`가 이미 정확히 이 문자열 값으로 존재하고 반환 상태값으로는 이미 import돼 쓰이는데, 웨이포인트 JSON의 `"motion"` 필드는 그냥 문자열로 검증돼서 오타(`"Pass"`, 끝 공백)가 런타임 JSON 로드 시점에야 실패한다.
 - **개선 방향:** `WaypointPlan.motion`/`load_waypoint_plan(expected_motion=...)`이 `RobotState`를 받게 변경. `common`은 이미 `RobotState`를 갖고 있어 공유 변경 불필요.
 - **노력:** S · **범위:** 패키지 로컬
 
 ### 6. 광범위한 `except Exception`이 복구 가능한 오류와 프로그래밍 오류를 구분 안 함
 
-- **위치:** `pass_motion.py:139`, `reject_motion.py:130`, `test_motion.py:115`, `test_motion_reject.py:98`, `teach_motion.py:244` — 전부 catch-and-print
+- **위치:** `motion_runner.py`(구 `pass_motion.py`/`reject_motion.py`), `teach_motion.py:244`, `manual_motion_check.py` — 전부 catch-and-print
 - **문제:** 하드웨어 오류와 버그를 같은 방식으로 처리해 원인 구분이 안 된다.
 - **개선 방향:** `(OmxCommunicationError, OmxCancelled, OSError)`로 좁힘.
 - **노력:** S · **범위:** 패키지 로컬
+- **2026-08-24 갱신:** `test_motion.py`/`test_motion_reject.py` 삭제로 중복 인스턴스는 5곳→3곳(`motion_runner.py`, `teach_motion.py`, `manual_motion_check.py`)으로 줄었지만, 예외 종류를 구분하지 않는 근본 문제 자체는 남아 있다.
 
 ### 7. `common.logger` 미사용
 
-- **위치:** `teach_motion.py`(51회 print), `test_motion.py`(16회), `pass_motion.py`/`reject_motion.py`(각 7회) — omx2_sorting 전체 93회 print, `common.logger` 0회(가장 많이 쓰면서 가장 안 쓰는 패키지)
-- **개선 방향:** 라이브러리 모듈은 logger로, 대화형 CLI는 print 유지.
+- **위치:** `teach_motion.py`(51회 print), `motion_runner.py`·`manual_motion_check.py`(구 `pass_motion.py`/`reject_motion.py`/`test_motion.py`의 print 대부분 이관) — `common.logger` 0회(가장 많이 쓰면서 가장 안 쓰는 패키지)
+- **개선 방향:** 라이브러리 모듈(`motion_runner.py`)은 logger로, 대화형 CLI(`teach_motion.py`, `manual_motion_check.py`)는 print 유지.
 - **노력:** 파일당 S, 누적 M · **범위:** 패키지 로컬
 
-### 8. 테스트 커버리지 갭
+### 8. 테스트 커버리지 갭 — ✅ 완료 (2026-08-24, `motion_runner.py`/`pass_motion.py`/`reject_motion.py` 범위)
 
-- **위치:** `move_basket.py`, `teach_motion.py`(252줄) — `tests/`에서 참조 0건. `reject_motion.run()`은 테스트 호출 **0건**, `pass_motion.run()`은 실패-폐쇄 케이스 1건만(성공 경로 테스트 없음).
-- **개선 방향:** 1번 항목으로 공유 러너를 뽑아낸 뒤 `RecordingController` 페이크로 성공/실패 양쪽 경로 테스트 추가, `reject_motion.run()`도 대칭으로.
-- **노력:** L · **범위:** 패키지 로컬
+- **위치(당시):** `reject_motion.run()`은 테스트 호출 **0건**, `pass_motion.run()`은 실패-폐쇄 케이스 1건만(성공 경로 테스트 없음).
+- **완료 기록 (2026-08-24):** `tests/test_omx_motion_runner.py` 신설 — PASS/REJECT 성공 경로, 검사 방향 불일치(양방향), 웨이포인트 파일 누락, 시퀀스 중간 취소까지 6개 케이스. `reject_motion.run()`이 이제 (공유 `run_motion()`을 통해) 실제로 테스트에서 실행된다. 기존 `tests/test_omx_waypoints.py`의 실패-폐쇄 시나리오는 변경 없이 통과.
+- **남은 갭:** `move_basket.py`, `teach_motion.py`(252줄)는 여전히 `tests/`에서 참조 0건 — 이 부분은 미완료.
 
 ---
 
@@ -303,9 +308,10 @@ Explore 에이전트 3개로 코드베이스 전체를 병렬 조사해 작성�
 ### 1. `common/constants.py`에 `OMX2_CONFIG_DIR`이 없음
 
 - **위치:** `common/constants.py:53`(`OMX1_CONFIG_DIR`은 있음, 대응하는 OMX2용 상수 없음)
-- **문제:** 모듈 자체 docstring은 경로 상수가 딱 한 곳에만 있어야 한다고 말하는데, import할 공유 상수가 없어서 `omx2_sorting`의 5개 파일이 로컬로 재계산한다 — [omx2_sorting #1](#1-packageroot--configdir--passreject-러너가-5개-파일에-중복)의 근본 원인.
+- **문제:** 모듈 자체 docstring은 경로 상수가 딱 한 곳에만 있어야 한다고 말하는데, import할 공유 상수가 없어서 `omx2_sorting`이 로컬로 재계산했다.
 - **개선 방향:** `OMX1_CONFIG_DIR` 패턴을 그대로 따라 `OMX2_CONFIG_DIR`, `OMX2_PASS_WAYPOINTS_PATH`, `OMX2_REJECT_WAYPOINTS_PATH` 추가.
-- **노력:** S(additive, non-breaking) · **범위:** 공유 변경 필요 — 다만 작고 위험도 낮아 합의를 얻기 쉬운 후보.
+- **노력:** S(additive, non-breaking) · **범위:** 공유 변경 필요.
+- **2026-08-24 갱신 — 긴급도 낮아짐:** [omx2_sorting #1](#1-packageroot--configdir--passreject-러너가-5개-파일에-중복-완료-2026-08-24)이 패키지 로컬로(`motion_runner.py` 한 곳에만 정의) 5개 파일 중복을 이미 해소했다. 이제 이 항목은 "중복의 근본 원인 제거"가 아니라, `OMX1_CONFIG_DIR`과의 일관성만을 위한 선택적 정리 — `common` 합의를 얻을 강한 이유가 예전만큼 없다.
 
 ### 2. 순수 로직인데 테스트가 없는 두 곳
 
@@ -387,11 +393,11 @@ AST로 공개 API 전체를 스캔한 결과 15개 갭, 전부 `__init__` 생성
 | 7 | ROS2 서비스·액션 서버·coordinator 노드 구현 | [ ] | **여전히 유효** | 서버 코드 전무, omx2_sorting/system_coordinator는 package.xml/setup.py조차 없음(위 system_coordinator 섹션 참고) |
 | 8 | GUI 검사 실패 상태 보존/표시 | [ ] | **여전히 유효** | `camera_feed.py:393-394` 예외 삼킴, 캡처 스레드가 모델 로드 실패와 무관하게 연결 상태를 매 프레임 덮어씀(위 system_monitor #11) |
 | 9 | ROS2 노드 실시간성/QoS 검증 | [ ] | 재검증 범위 밖(신규 기능/하드닝 영역) | — |
-| 10 | 통합·ROS2·하드웨어 경계 테스트 | [ ] | **여전히 유효, 정확히 설명된 대로** | `reject_motion.run()`은 테스트에서 한 번도 호출 안 됨 |
+| 10 | 통합·ROS2·하드웨어 경계 테스트 | [ ] | **omx2_sorting 부분만 개선됨(2026-08-24)** | `pass_motion.run()`/`reject_motion.run()`이 공유하는 `motion_runner.run_motion()`에 성공/실패 경로 테스트가 생겼다(`tests/test_omx_motion_runner.py`, [omx2_sorting #8](#8-테스트-커버리지-갭-완료-2026-08-24-motion_runnerpypass_motionpyreject_motionpy-범위) 참고). omx1_loading 러너, ROS2 노드 등 나머지는 여전히 미검증 |
 | 11 | CI와 정적 검사 구성 | [ ] | **여전히 유효하나 전제 일부 낡음** | CI 없음. "pytest 미설치" 주장은 이제 거짓(9.1.1 설치돼 있음) — 완료 기록 갱신 필요 |
 | 12 | 설치본에서 설정·웨이포인트 리소스 확인 | [ ] | **여전히 유효, 부분적으로만 뼈대** | vision_inspection은 data_files 선언(부분 진전), omx2_sorting은 setup.py 자체가 없음. **omx1_loading도 같은 버그 있음(위 omx1_loading #1)** — 담당자 목록에 빠져 있었음 |
 | 13 | 문서와 구현 상태 동기화 | [ ] | **여전히 유효 — 재확인** | omx2_sorting/README.md가 완성된 코드를 미구현으로 표시(위 omx2_sorting #2). system_coordinator/README.md는 정확함 |
-| 14 | 중복 코드와 광범위 except 정리 | [ ] | **여전히 유효, 완전히 재확인됨** | PACKAGE_ROOT/CONFIG_DIR 5개 파일 중복(위 omx2_sorting #1), except Exception 저장소 전체 58회 중 62%가 system_monitor |
+| 14 | 중복 코드와 광범위 except 정리 | [ ] | **omx2_sorting 부분 완료(2026-08-24)** | PACKAGE_ROOT/CONFIG_DIR 5개 파일 중복은 해소(위 omx2_sorting #1). except Exception은 여전히 구분 없음(omx2_sorting #6), 저장소 전체 58회 중 62%인 system_monitor는 그대로 |
 
 ---
 
@@ -416,7 +422,7 @@ AST로 공개 API 전체를 스캔한 결과 15개 갭, 전부 `__init__` 생성
 |---|---|---|---|---|
 | `origin/feat/GUI` | 2026-08-11(13일 정체) | system_monitor | 예, 고유 커밋 0개 | 삭제 안전 |
 | `origin/feat/yolo` | 2026-08-21(3일) | vision_inspection | 예, 고유 커밋 0개(조사 시점) | 이 세션이 사용 중인 브랜치 — 최신 커밋이 실제로 dev에 병합됐는지 삭제 전 재확인 |
-| `origin/feat/omx2-sorting` | 2026-08-05(19일 정체) | omx2_sorting | 예, 고유 커밋 0개 | 삭제 안전 |
+| `origin/feat/omx2-sorting` | 2026-08-24 | omx2_sorting | 예, PR #14로 병합 완료 | 병합됐고 원격에 아직 남아 있음 — 정리해도 됨 |
 | `origin/feat/omx1` | 2026-08-05(19일 정체) | omx1_loading | 아니오(형식상) | "고유" 커밋 2개가 전부 병합 커밋 — 실질적으로 죽은 브랜치, 대체됐는지 확인 후 삭제 |
 | `origin/feat/omx1-rule-based` | 2026-08-21(3일) | omx1_loading | 아니오 | **진짜 미병합 커밋 1개**(`"FEAT: can pick&drop but need more fix"`) — 진행 중인 작업, 유지 |
 | (브랜치 없음) | — | common, project_interfaces, system_coordinator | — | 전용 브랜치 자체가 없었음 — dev에서 직접 편집하는 보호 경로 모델과 일치. 공식 컨벤션으로 문서화할지만 팀이 결정 |
