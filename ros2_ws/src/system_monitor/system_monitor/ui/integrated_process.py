@@ -1,13 +1,18 @@
-"""통합 공정에서 실행할 단계를 장치 상태로 결정하는 순수 로직.
+"""통합 공정에서 실행할 단계를 장치 상태로 결정하고, 그 계획을 순서대로 실행하는 순수 로직.
 
 실제 장치 제어와 Tk 위젯 갱신은 :mod:`system_monitor.ui.viewer`가 담당한다.
 여기는 버튼을 누른 시점의 네 장치 상태와 설정 파일 준비 여부만 받아서 어떤
-단계를 실행하고 건너뛸지 정한다. 하드웨어 없이도 공정 계획을 테스트하기 위해
-GUI와 장치 모듈을 import하지 않는다.
+단계를 실행하고 건너뛸지 정하고(``build_process_plan``), 실제 실행은 장치
+제어를 콜백으로 주입받아 순서·취소·예외만 담당한다(``run_process_cycle``).
+하드웨어 없이도 계획 수립과 실행 시퀀싱을 테스트하기 위해 GUI와 장치 모듈을
+import하지 않는다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
+
+from common.messages import InspectionResult, RobotStatus
 
 
 @dataclass(frozen=True)
@@ -89,3 +94,95 @@ def build_process_plan(
         run_sorting=run_sorting,
         skipped=tuple(skipped),
     )
+
+
+class ProcessCancelled(Exception):
+    """사용자가 통합 공정 중단을 요청했다는 신호."""
+
+
+@dataclass(frozen=True)
+class CycleOutcome:
+    """``run_process_cycle`` 한 번 실행의 최종 결과."""
+
+    status: str  # "completed" | "partial" | "cancelled" | "failed"
+    completed: tuple[str, ...]
+    detail: str
+
+
+def run_process_cycle(
+    plan: ProcessPlan,
+    *,
+    run_loading: Callable[[], None],
+    wait_for_inspection: Callable[[], InspectionResult | None],
+    run_sorting: Callable[[InspectionResult], RobotStatus],
+    set_status: Callable[[str], None],
+    is_cancelled: Callable[[], bool],
+    inspection_timeout_sec: float,
+) -> CycleOutcome:
+    """계획된 단계를 순서대로 실행하고 결과를 요약한다.
+
+    장치 제어·카메라 대기·Tk 상태 표시는 전부 콜백으로 주입받는다 — 이 함수
+    자체는 하드웨어나 GUI를 몰라서 순서·취소·예외 처리만 하드웨어 없이 테스트할
+    수 있다. 실제 장치 호출·타이밍은 :mod:`system_monitor.ui.viewer`가 담당한다.
+    """
+
+    def check_cancelled() -> None:
+        if is_cancelled():
+            raise ProcessCancelled
+
+    completed: list[str] = []
+    inspection: InspectionResult | None = None
+    status = "completed"
+    detail = ""
+    try:
+        if plan.run_loading:
+            set_status("1/3 · OMX1 적재 중 — 물체 탐지 대기")
+            run_loading()
+            check_cancelled()
+            completed.append("OMX1 적재")
+            print("[통합 공정] OMX1 적재 완료")
+
+        if plan.run_inspection:
+            check_cancelled()
+            set_status("2/3 · 새 검사 판정 안정화 대기 중...")
+            inspection = wait_for_inspection()
+            if inspection is None:
+                detail = (
+                    f"{inspection_timeout_sec:.0f}초 안에 새 검사 결과가 "
+                    "확정되지 않아 OMX2 분류를 건너뛰었습니다."
+                )
+                status = "partial"
+                print(f"[통합 공정] {detail}")
+            else:
+                completed.append("비전 검사")
+                print(
+                    f"[통합 공정] 검사 완료: {inspection.result} · "
+                    f"전체 {inspection.total_count}, 불량 {inspection.defect_count}"
+                )
+
+        if plan.run_sorting and inspection is not None:
+            check_cancelled()
+            motion = "PASS" if inspection.is_pass else "REJECT"
+            set_status(f"3/3 · OMX2 {motion} 분류 중...")
+            sort_status = run_sorting(inspection)
+            if not sort_status.success:
+                raise RuntimeError(sort_status.message or f"OMX2 {motion} 동작 실패")
+            completed.append(f"OMX2 {motion} 분류")
+            print(f"[통합 공정] {motion} 분류 완료: {sort_status.message}")
+
+        check_cancelled()
+    except ProcessCancelled:
+        status = "cancelled"
+        detail = "사용자 요청으로 중단했습니다."
+        print("[통합 공정] 사용자 중단")
+    except Exception as error:
+        if is_cancelled():
+            status = "cancelled"
+            detail = "사용자 요청으로 중단했습니다."
+            print(f"[통합 공정] 사용자 중단: {error}")
+        else:
+            status = "failed"
+            detail = str(error)
+            print(f"[통합 공정] 실패: {error}")
+
+    return CycleOutcome(status=status, completed=tuple(completed), detail=detail)

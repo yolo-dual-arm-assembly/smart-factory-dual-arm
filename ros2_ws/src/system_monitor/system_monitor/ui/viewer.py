@@ -49,8 +49,10 @@ from system_monitor.ui.device_roles import (
 )
 from system_monitor.ui.integrated_process import (
     DeviceAvailability,
+    ProcessCancelled,
     ProcessPlan,
     build_process_plan,
+    run_process_cycle,
 )
 from system_monitor.ui.omx_panel import OmxPanel
 from system_monitor.ui.sorting_panel import (
@@ -104,10 +106,6 @@ TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     SORTING_MOTION: ((ARM_SORTING,), ()),
     SORTING_TEACHING: ((ARM_SORTING,), ()),
 }
-
-
-class _ProcessCancelled(RuntimeError):
-    """사용자가 통합 공정 중단을 요청했음을 워커 안에서 구분한다."""
 
 
 class OperatorDashboard(tk.Tk):
@@ -517,80 +515,40 @@ class OperatorDashboard(tk.Tk):
         sorting_port: str | None,
         imitation_index: int | None,
     ) -> None:
-        completed: list[str] = []
-        inspection: InspectionResult | None = None
-        outcome = "completed"
-        detail = ""
+        def run_loading() -> None:
+            if loading_port is None or imitation_index is None:
+                raise RuntimeError("OMX1 적재 장치 배정이 실행 직전에 사라졌습니다.")
+            self._run_loading_once(loading_port, imitation_index)
+
+        def run_sorting(inspection: InspectionResult) -> RobotStatus:
+            if sorting_port is None:
+                raise RuntimeError("OMX2 포트 배정이 실행 직전에 사라졌습니다.")
+            return self._run_sorting_once(sorting_port, inspection)
+
         try:
-            if plan.run_loading:
-                if loading_port is None or imitation_index is None:
-                    raise RuntimeError(
-                        "OMX1 적재 장치 배정이 실행 직전에 사라졌습니다."
-                    )
-                self._set_integrated_status("1/3 · OMX1 적재 중 — 물체 탐지 대기")
-                self._run_loading_once(loading_port, imitation_index)
-                self._raise_if_integrated_cancelled()
-                completed.append("OMX1 적재")
-                print("[통합 공정] OMX1 적재 완료")
-
-            if plan.run_inspection:
-                self._raise_if_integrated_cancelled()
-                self._set_integrated_status("2/3 · 새 검사 판정 안정화 대기 중...")
-                inspection = self._wait_for_fresh_inspection()
-                if inspection is None:
-                    detail = (
-                        f"{INSPECTION_TIMEOUT_SEC:.0f}초 안에 새 검사 결과가 "
-                        "확정되지 않아 OMX2 분류를 건너뛰었습니다."
-                    )
-                    outcome = "partial"
-                    print(f"[통합 공정] {detail}")
-                else:
-                    completed.append("비전 검사")
-                    print(
-                        f"[통합 공정] 검사 완료: {inspection.result} · "
-                        f"전체 {inspection.total_count}, 불량 {inspection.defect_count}"
-                    )
-
-            if plan.run_sorting and inspection is not None:
-                self._raise_if_integrated_cancelled()
-                if sorting_port is None:
-                    raise RuntimeError("OMX2 포트 배정이 실행 직전에 사라졌습니다.")
-                motion = "PASS" if inspection.is_pass else "REJECT"
-                self._set_integrated_status(f"3/3 · OMX2 {motion} 분류 중...")
-                status = self._run_sorting_once(sorting_port, inspection)
-                if not status.success:
-                    raise RuntimeError(status.message or f"OMX2 {motion} 동작 실패")
-                completed.append(f"OMX2 {motion} 분류")
-                print(f"[통합 공정] {motion} 분류 완료: {status.message}")
-
-            self._raise_if_integrated_cancelled()
-        except _ProcessCancelled:
-            outcome = "cancelled"
-            detail = "사용자 요청으로 중단했습니다."
-            print("[통합 공정] 사용자 중단")
-        except Exception as error:
-            if self._integrated_cancel.is_set():
-                outcome = "cancelled"
-                detail = "사용자 요청으로 중단했습니다."
-                print(f"[통합 공정] 사용자 중단: {error}")
-            else:
-                outcome = "failed"
-                detail = str(error)
-                print(f"[통합 공정] 실패: {error}")
+            result = run_process_cycle(
+                plan,
+                run_loading=run_loading,
+                wait_for_inspection=self._wait_for_fresh_inspection,
+                run_sorting=run_sorting,
+                set_status=self._set_integrated_status,
+                is_cancelled=self._integrated_cancel.is_set,
+                inspection_timeout_sec=INSPECTION_TIMEOUT_SEC,
+            )
         finally:
             self._integrated_loading_runner = None
             self._integrated_sorting_controller = None
-            try:
-                self.after(
-                    0,
-                    self._integrated_done,
-                    outcome,
-                    tuple(completed),
-                    detail,
-                    plan,
-                )
-            except (RuntimeError, tk.TclError):
-                pass
+        try:
+            self.after(
+                0,
+                self._integrated_done,
+                result.status,
+                result.completed,
+                result.detail,
+                plan,
+            )
+        except (RuntimeError, tk.TclError):
+            pass
 
     def _run_loading_once(self, port: str, camera_index: int) -> None:
         """기존 OMX1 Pick & Place 실행기를 첫 동작 뒤 종료되도록 감싼다."""
@@ -621,7 +579,7 @@ class OperatorDashboard(tk.Tk):
         )
         dashboard._integrated_loading_runner = runner
         if self._integrated_cancel.is_set():
-            raise _ProcessCancelled
+            raise ProcessCancelled
         runner.run()
         if not runner.cycle_completed:
             raise RuntimeError(
@@ -659,7 +617,7 @@ class OperatorDashboard(tk.Tk):
 
     def _raise_if_integrated_cancelled(self) -> None:
         if self._integrated_cancel.is_set():
-            raise _ProcessCancelled
+            raise ProcessCancelled
 
     def _set_integrated_status(self, text: str) -> None:
         try:
