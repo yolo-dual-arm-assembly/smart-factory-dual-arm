@@ -4,9 +4,7 @@ from pathlib import Path
 
 from common.omx_controller import OmxController
 
-
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_DIR = PACKAGE_ROOT / "config"
+from omx2_sorting.motion_runner import CONFIG_DIR
 
 
 def select_motion() -> tuple[str, Path]:
