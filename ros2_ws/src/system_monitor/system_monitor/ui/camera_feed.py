@@ -21,6 +21,7 @@ from pathlib import Path
 
 from common.camera import open_camera
 from common.messages import InspectionResult
+from system_monitor.ui.capture_metrics import annotate_and_count, update_fps
 
 # common.camera의 기본 캡처 크기와 같은 값을 쓴다. open_camera가 MJPG로 열기
 # 때문에 압축된 프레임이 흘러 USB 대역폭 부담이 크지 않다.
@@ -279,7 +280,7 @@ class CameraFeed:
             now = time.perf_counter()
             elapsed, last_time = now - last_time, now
             if elapsed > 0:
-                fps = 0.9 * fps + 0.1 / elapsed if fps else 1.0 / elapsed
+                fps = update_fps(fps, elapsed)
 
             with self._lock:
                 self._raw_frame = frame
@@ -290,9 +291,7 @@ class CameraFeed:
                 self._video_fps = fps
 
             if result is not None:
-                # plot은 전달한 이미지에 직접 그리므로 원본은 복사해 보호한다.
-                annotated = result.plot(img=frame.copy())
-                count = 0 if result.boxes is None else len(result.boxes)
+                annotated, count = annotate_and_count(result, frame)
                 inspection, settling = self._inspection_from(result, result_seq)
             else:
                 annotated, count, inspection, settling = frame, 0, None, False
@@ -351,11 +350,7 @@ class CameraFeed:
                 self._last_result = result
                 # 안정화 게이트가 "새 추론"과 "같은 추론의 재사용"을 구분하는 번호.
                 self._result_seq += 1
-                self._infer_fps = (
-                    0.9 * self._infer_fps + 0.1 / elapsed
-                    if self._infer_fps
-                    else 1.0 / elapsed
-                )
+                self._infer_fps = update_fps(self._infer_fps, elapsed)
 
     def _inspection_from(
         self, result, result_seq: int
