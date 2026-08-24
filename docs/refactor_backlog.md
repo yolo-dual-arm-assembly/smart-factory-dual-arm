@@ -12,18 +12,17 @@ Explore 에이전트 3개로 코드베이스 전체를 병렬 조사해 작성�
 
 ## 우선순위 요약
 
-**2026-08-24 갱신:** 최우선 항목이던 `omx2_sorting` PASS/REJECT 러너 중복 제거를
-`feat/omx2-sorting` 브랜치에서 완료해 `dev`에 병합했다(PR #14). 자세한 내용은
-[omx2_sorting #1](#1-packageroot--configdir--passreject-러너가-5개-파일에-중복-완료-2026-08-24)
-참고. 아래는 그다음으로 손대면 좋은 항목들이다 — 노력 대비 효과가 크고, 대부분
-공유 변경이 필요 없다.
+**2026-08-24 갱신:** `omx2_sorting` PASS/REJECT 러너 중복 제거(`feat/omx2-sorting`
+→ `dev`, PR #14)에 이어 `system_monitor` 죽은 코드 3종([#3](#3-webcampy-미사용-import-완료-2026-08-24)·
+[#4](#4-죽은-클래스-armmonitorgroup-완료-2026-08-24)·[#5](#5-죽은-매개변수-omxpanelrequest_closeon_ready-완료-2026-08-24))도
+`feat/GUI` 브랜치에서 완료했다. 아래는 그다음으로 손대면 좋은 항목들이다.
 
 | 항목 | 담당 패키지 | 노력 | 왜 먼저인가 |
 |---|---|---|---|
-| system_monitor 죽은 코드 3종 정리 ([#3](#3-webcampy-미사용-import)·[#4](#4-죽은-클래스-armmonitorgroup)·[#5](#5-죽은-매개변수-omxpanelrequest_closeon_ready)) | system_monitor | XS 각각 | 셋 다 몇 분짜리 삭제, 위험 0. 방금 omx2_sorting에서 한 것처럼 한 세션에 바로 처리 가능 |
 | `common.camera.open_camera()` 사용 ([omx1_loading #5](#5-pick_ballpyrun_vision_pickpy가-commoncameraopen_camera를-우회)) | omx1_loading | S | 픽업 경로와 교시/모방 경로에서 카메라가 실제로 다르게 동작하는 잠재 버그 제거, 공유 합의 불필요 |
-| `RobotState` enum 사용, raw 문자열 제거 ([omx2_sorting #5](#5-손으로-쓴-passreject-문자열-robotstate-enum-미사용)) | omx2_sorting | S | 방금 손댄 `motion_runner.py`/`waypoints.py`와 같은 영역이라 맥락을 유지한 채 이어서 하기 좋음 |
-| `webcam.py`/`camera_feed.py` 캡처 엔진 통합 ([system_monitor #1](#1-webcampy-vs-camera_feedpy--캡처추론-엔진-중복)) | system_monitor | M | 문자 그대로 복붙된 코드(FPS 계산식 4곳 중복), 버그 수정이 한쪽에만 반영될 위험 — 가장 큰 단일 임팩트 |
+| `RobotState` enum 사용, raw 문자열 제거 ([omx2_sorting #5](#5-손으로-쓴-passreject-문자열-robotstate-enum-미사용)) | omx2_sorting | S | omx2_sorting 리팩토링 때 손댄 `motion_runner.py`/`waypoints.py`와 같은 영역이라 맥락 재사용이 쉬움 |
+| `webcam.py`/`camera_feed.py` 캡처 엔진 통합 ([system_monitor #1](#1-webcampy-vs-camera_feedpy--캡처추론-엔진-중복)) | system_monitor | M | 문자 그대로 복붙된 코드(FPS 계산식 4곳 중복), 버그 수정이 한쪽에만 반영될 위험 — 가장 큰 단일 임팩트, 방금 정리한 파일들과 같은 디렉터리 |
+| 통합공정 오케스트레이션을 테스트 가능하게 분리 ([system_monitor #2](#2-통합공정-오케스트레이션이-gui-클래스에-파묻혀-테스트-불가)) | system_monitor | M | `viewer.py`가 테스트된 `MainController`를 안 쓰고 시퀀싱을 중복 구현 중인 구조적 문제, 위 #1과 같은 파일(`viewer.py`) 작업이라 묶어서 하기 좋음 |
 
 `common`에 `OMX2_CONFIG_DIR` 추가([common #1](#1-commonconstantspy에-omx2configdir이-없음))는
 omx2_sorting #1이 패키지 로컬로 이미 중복을 해소해서 긴급도가 낮아졌다 — 자세한
@@ -80,25 +79,23 @@ omx2_sorting #1이 패키지 로컬로 이미 중복을 해소해서 긴급도�
 - **개선 방향:** "사이클 1회 실행" 시퀀싱을 `build_process_plan`과 같은 패턴으로 순수 함수/클래스로 추출.
 - **노력:** M · **범위:** 패키지 로컬
 
-### 3. `webcam.py` 미사용 import
+### 3. `webcam.py` 미사용 import — ✅ 완료 (2026-08-24)
 
-- **위치:** `webcam.py:29,32`
-- **문제:** `common.camera`의 `_linux_camera_indexes`, `preferred_camera_indexes`를 import하지만 파일 어디서도 안 쓴다. `common/camera.py`는 "옛날 코드가 import해서" 유지한다는 주석까지 있는데, 그 "옛날 코드"가 여기 하나뿐이다.
-- **개선 방향:** 미사용 import 2개 삭제.
-- **노력:** XS · **범위:** 패키지 로컬
+- **위치(당시):** `webcam.py:29,32`
+- **문제(당시):** `common.camera`의 `_linux_camera_indexes`, `preferred_camera_indexes`를 import하지만 파일 어디서도 안 쓴다. `common/camera.py`는 "옛날 코드가 import해서" 유지한다는 주석까지 있는데, 그 "옛날 코드"가 여기 하나뿐이다.
+- **완료 기록 (2026-08-24):** 미사용 import 2개 삭제(`open_camera`/`open_preferred_camera`만 남김).
 
-### 4. 죽은 클래스 `ArmMonitorGroup`
+### 4. 죽은 클래스 `ArmMonitorGroup` — ✅ 완료 (2026-08-24)
 
-- **위치:** `arm_monitor.py:237-256`
-- **문제:** `start_all`/`stop_all`/`snapshots`를 제공하지만 저장소 전체에서 호출하는 곳이 없다. `viewer.py`는 같은 목적으로 그냥 `dict[str, ArmMonitor]`를 쓴다.
-- **개선 방향:** 삭제하거나, 원래 dict를 대체할 의도였다면 교체 후 dict 쪽 삭제.
-- **노력:** XS · **범위:** 패키지 로컬
+- **위치(당시):** `arm_monitor.py:237-256`
+- **문제(당시):** `start_all`/`stop_all`/`snapshots`를 제공하지만 저장소 전체에서 호출하는 곳이 없다. `viewer.py`는 같은 목적으로 그냥 `dict[str, ArmMonitor]`를 쓴다.
+- **완료 기록 (2026-08-24):** 클래스 삭제. `viewer.py`의 `dict[str, ArmMonitor]` 사용은 그대로 유지(원래 대체 대상이 아니라 별개 경로였음을 재확인).
 
-### 5. 죽은 매개변수 `OmxPanel.request_close(on_ready)`
+### 5. 죽은 매개변수 `OmxPanel.request_close(on_ready)` — ✅ 완료 (2026-08-24)
 
-- **위치:** `omx_panel.py:149-164`, 호출부 `viewer.py:1037-1039`
-- **문제:** `on_ready` 콜백을 받아 바로 `del on_ready`(자체 주석으로 죽은 코드임을 인정). 호출부는 `self._finish_close`를 넘기고 바로 뒤에서 무조건 다시 호출한다.
-- **개선 방향:** 매개변수 제거, 호출부 정리.
+- **위치(당시):** `omx_panel.py:149-164`, 호출부 `viewer.py:1037-1039`
+- **문제(당시):** `on_ready` 콜백을 받아 바로 `del on_ready`(자체 주석으로 죽은 코드임을 인정). 호출부는 `self._finish_close`를 넘기고 바로 뒤에서 무조건 다시 호출한다.
+- **완료 기록 (2026-08-24):** 매개변수와 이제 안 쓰는 `ShutdownReadyCallback` 타입 별칭 삭제. `viewer.py:1037`을 `self.omx_panel.request_close()`로 정리. `feat/GUI` 브랜치에서 진행.
 - **노력:** XS · **범위:** 패키지 로컬
 
 ### 6. `omx_manual_control.py::_build_ui`가 134줄짜리 모놀리스

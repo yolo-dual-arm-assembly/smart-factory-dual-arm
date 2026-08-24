@@ -1034,7 +1034,7 @@ class OperatorDashboard(tk.Tk):
             return
         if not self.sorting_panel.request_close():
             return
-        if not self.omx_panel.request_close(self._finish_close):
+        if not self.omx_panel.request_close():
             return
         self._finish_close()
 

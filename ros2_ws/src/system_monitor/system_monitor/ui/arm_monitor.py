@@ -232,24 +232,3 @@ class ArmMonitor:
         except Exception:
             # 이미 뽑힌 포트를 닫는 실패로 종료 흐름을 막지 않는다.
             pass
-
-
-class ArmMonitorGroup:
-    """팔 여러 대를 한꺼번에 다루는 얇은 묶음."""
-
-    def __init__(self, monitors: dict[str, ArmMonitor]) -> None:
-        self._monitors = monitors
-
-    def __getitem__(self, role_key: str) -> ArmMonitor:
-        return self._monitors[role_key]
-
-    def start_all(self) -> None:
-        for monitor in self._monitors.values():
-            monitor.start()
-
-    def stop_all(self) -> None:
-        for monitor in self._monitors.values():
-            monitor.stop()
-
-    def snapshots(self) -> dict[str, ArmSnapshot]:
-        return {key: monitor.snapshot() for key, monitor in self._monitors.items()}

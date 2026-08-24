@@ -25,12 +25,7 @@ import cv2
 from PIL import Image, ImageTk
 from ultralytics import YOLO
 
-from common.camera import (
-    _linux_camera_indexes,
-    open_camera,
-    open_preferred_camera,
-    preferred_camera_indexes,
-)
+from common.camera import open_camera, open_preferred_camera
 from system_monitor.ui.ui_fonts import configure_korean_fonts
 
 WEBCAM_CONFIDENCE = 0.5
