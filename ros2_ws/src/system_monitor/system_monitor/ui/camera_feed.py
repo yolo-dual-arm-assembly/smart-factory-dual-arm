@@ -33,6 +33,9 @@ from system_monitor.ui.capture_metrics import annotate_and_count, update_fps
 FEED_WIDTH = 1280
 FEED_HEIGHT = 720
 INFERENCE_CONFIDENCE = 0.5
+# 사람 감지는 ball/others와 별개인 COCO 사전학습 모델(person=0)로 돌린다.
+PERSON_CONFIDENCE = 0.5
+PERSON_CLASS_ID = 0  # COCO "person"
 # 새 프레임이 없을 때 추론 스레드가 CPU를 태우지 않도록 잠깐 쉰다.
 IDLE_SLEEP_SEC = 0.005
 RETRY_INTERVAL_SEC = 2.0
@@ -54,6 +57,9 @@ class CameraSnapshot:
     settling: bool = False
     message: str = ""
     released: bool = False
+    # ball/others와 독립된 사람 감지 결과(경고 표시 전용, 판정에는 영향 없음).
+    person_detected: bool = False
+    person_count: int = 0
 
     @property
     def status_text(self) -> str:
@@ -78,12 +84,15 @@ class CameraFeed:
         name: str = "",
         *,
         model_path: Path | None = None,
+        person_model_path: Path | None = None,
     ) -> None:
         self.role_key = role_key
         self._index = index
         self._name = name
         # model_path가 있으면 추론 스레드를 함께 돌린다(검수 캠).
         self._model_path = model_path
+        # 있으면 ball/others와 별개인 사람 감지 스레드를 추가로 돌린다.
+        self._person_model_path = person_model_path
 
         self._lock = threading.Lock()
         self._threads: list[threading.Thread] = []
@@ -95,6 +104,8 @@ class CameraFeed:
         self._last_result = None
         self._video_fps = 0.0
         self._infer_fps = 0.0
+        self._person_detected = False
+        self._person_count = 0
         self._released = False
         self._snapshot = CameraSnapshot(index=index, name=name)
         # 운영 중에만 쓰는 기준 개수 덮어쓰기. None이면 설정 파일 값을 그대로
@@ -127,6 +138,14 @@ class CameraFeed:
                     daemon=True,
                 )
             )
+        if self._person_model_path is not None:
+            self._threads.append(
+                threading.Thread(
+                    target=self._person_worker,
+                    name=f"cam-{self.role_key}-person",
+                    daemon=True,
+                )
+            )
         for thread in self._threads:
             thread.start()
 
@@ -140,6 +159,8 @@ class CameraFeed:
             self._preview = None
             self._raw_frame = None
             self._last_result = None
+            self._person_detected = False
+            self._person_count = 0
             # 피드가 멈추면 이전 장면의 확정 판정도 의미가 없다. 다시 시작할 때
             # 낡은 판정을 끌고 가지 않도록 게이트를 비운다.
             if self._stabilizer is not None:
@@ -288,6 +309,8 @@ class CameraFeed:
                 result = self._last_result
                 result_seq = self._result_seq
                 infer_fps = self._infer_fps
+                person_detected = self._person_detected
+                person_count = self._person_count
                 self._video_fps = fps
 
             if result is not None:
@@ -309,6 +332,8 @@ class CameraFeed:
                     detection_count=count,
                     inspection=inspection,
                     settling=settling,
+                    person_detected=person_detected,
+                    person_count=person_count,
                 )
 
     def _inference_worker(self) -> None:
@@ -351,6 +376,48 @@ class CameraFeed:
                 # 안정화 게이트가 "새 추론"과 "같은 추론의 재사용"을 구분하는 번호.
                 self._result_seq += 1
                 self._infer_fps = update_fps(self._infer_fps, elapsed)
+
+    def _person_worker(self) -> None:
+        """ball/others와 별개로 사람(COCO person=0)만 감지해 경고용 개수를 남긴다.
+
+        판정 로직(``_inspection_from``)과는 완전히 분리돼 있다. 이 모델이
+        없거나 추론이 실패해도 ball/others 검사 표시(``_snapshot``/에러
+        메시지)는 절대 건드리지 않는다 — 경고 기능만 조용히 꺼질 뿐이다.
+        """
+        from vision_inspection.inspection_logic import load_model
+
+        try:
+            model = load_model(self._person_model_path)
+        except Exception as error:
+            print(f"[camera {self.role_key}] 사람 감지 모델 로드 실패: {error}")
+            return
+
+        processed_seq = 0
+        while not self._stop_event.is_set():
+            with self._lock:
+                frame = self._raw_frame
+                seq = self._raw_seq
+            if frame is None or seq == processed_seq:
+                time.sleep(IDLE_SLEEP_SEC)
+                continue
+            processed_seq = seq
+
+            try:
+                result = model(
+                    frame,
+                    conf=PERSON_CONFIDENCE,
+                    classes=[PERSON_CLASS_ID],
+                    verbose=False,
+                )[0]
+            except Exception as error:
+                print(f"[camera {self.role_key}] 사람 감지 추론 실패: {error}")
+                time.sleep(IDLE_SLEEP_SEC)
+                continue
+
+            count = 0 if result.boxes is None else len(result.boxes)
+            with self._lock:
+                self._person_count = count
+                self._person_detected = count > 0
 
     def _inspection_from(
         self, result, result_seq: int

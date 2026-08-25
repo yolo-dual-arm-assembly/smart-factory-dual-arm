@@ -34,6 +34,7 @@ from system_monitor.ui.arm_monitor import ArmMonitor
 from system_monitor.ui.camera_feed import CameraFeed
 from system_monitor.ui.console import ConsolePanel, ConsoleRedirector
 from system_monitor.ui.device_cards import (
+    COLOR_WARN,
     ArmStatusCard,
     CameraStatusCard,
     InspectionResultBar,
@@ -91,6 +92,12 @@ CAM_IMITATION, CAM_INSPECTION = (role.key for role in CAMERA_ROLES)
 # 알리는 편이 낫다. 그래서 없을 때 다른 모델로 갈아타지 않는다.
 INSPECTION_MODEL_PATH = MODELS_DIR / "best.pt"
 
+# 검수 판정과는 무관한, 독립된 두 번째 추론이다. COCO 사전학습 모델을 그대로
+# 쓰며 위 INSPECTION_MODEL_PATH를 대체하지 않는다 — 사람(class 0)만 걸러
+# 화면에 경고만 띄운다(로봇 정지 연동 없음). vision_inspection의 모델 다운로드
+# 목록에 이미 등록돼 있어 없으면 그쪽에서 받으면 된다.
+PERSON_MODEL_PATH = MODELS_DIR / "yolov8n.pt"
+
 # 설정 파일에서 기준 개수를 꺼 뒀을 때 스핀박스에 띄울 값.
 DEFAULT_TARGET_COUNT = 1
 
@@ -146,7 +153,12 @@ class OperatorDashboard(tk.Tk):
         self.cameras: dict[str, CameraFeed] = {
             CAM_IMITATION: CameraFeed(CAM_IMITATION, None),
             CAM_INSPECTION: CameraFeed(
-                CAM_INSPECTION, None, model_path=inspection_model_path
+                CAM_INSPECTION,
+                None,
+                model_path=inspection_model_path,
+                person_model_path=(
+                    PERSON_MODEL_PATH if PERSON_MODEL_PATH.is_file() else None
+                ),
             ),
         }
 
@@ -154,6 +166,7 @@ class OperatorDashboard(tk.Tk):
         self._console_redirector.install()
         print(omx_assignment_status(loading_port, sorting_port))
         print(self._inspection_model_status())
+        print(self._person_model_status())
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(CONSOLE_POLL_MS, self._drain_console)
@@ -197,6 +210,16 @@ class OperatorDashboard(tk.Tk):
             "다른 모델로 대체하지 않습니다 — 클래스 이름이 달라 항상 REJECT가 됩니다."
         )
 
+    @staticmethod
+    def _person_model_status() -> str:
+        """검수 캠 사람 감지 경고에 쓸 모델 상태를 한 줄로. 없으면 조용히 꺼진다."""
+        if PERSON_MODEL_PATH.is_file():
+            return f"[검수 캠] 사람 감지 모델 {PERSON_MODEL_PATH.name} 사용"
+        return (
+            f"[검수 캠] 사람 감지 모델 없음: {PERSON_MODEL_PATH} — 경고 기능 비활성화"
+            " (개발 도구의 모델 다운로드로 받을 수 있습니다)"
+        )
+
     # ------------------------------------------------------------------ UI 구성
 
     def _build_ui(self) -> None:
@@ -208,6 +231,7 @@ class OperatorDashboard(tk.Tk):
         self._build_status_row()
         self._build_video_row()
         self._build_result_bar()
+        self._build_person_warning()
         self._build_integrated_bar()
         self._build_tools_and_console()
 
@@ -278,9 +302,22 @@ class OperatorDashboard(tk.Tk):
         )
         self.result_bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 0))
 
+    def _build_person_warning(self) -> None:
+        """검수 캠에 사람이 잡히면 뜨는 경고. 로봇 정지 연동은 없다(표시만)."""
+        self.person_warning_var = tk.StringVar(value="")
+        self.person_warning_label = ttk.Label(
+            self,
+            textvariable=self.person_warning_var,
+            anchor="w",
+            foreground=COLOR_WARN,
+        )
+        self.person_warning_label.grid(
+            row=3, column=0, sticky="ew", padx=10, pady=(4, 0)
+        )
+
     def _build_integrated_bar(self) -> None:
         bar = ttk.LabelFrame(self, text="통합 공정", padding=(10, 6))
-        bar.grid(row=3, column=0, sticky="ew", padx=10, pady=(8, 0))
+        bar.grid(row=4, column=0, sticky="ew", padx=10, pady=(8, 0))
         bar.columnconfigure(2, weight=1)
 
         self.integrated_button = ttk.Button(
@@ -303,7 +340,7 @@ class OperatorDashboard(tk.Tk):
 
     def _build_tools_and_console(self) -> None:
         bottom = ttk.Frame(self, padding=(10, 8, 10, 10))
-        bottom.grid(row=4, column=0, sticky="nsew")
+        bottom.grid(row=5, column=0, sticky="nsew")
         # 도구를 세로로 쌓으면 이 행이 창의 절반을 먹어 영상이 눌린다.
         # OMX1 도구 · OMX2 분류 · 카메라 배정 · 콘솔을 가로로 나란히 둔다.
         bottom.columnconfigure(3, weight=1)
@@ -924,6 +961,12 @@ class OperatorDashboard(tk.Tk):
             inspection_snapshot.inspection, settling=inspection_snapshot.settling
         )
         self._log_verdict_change(inspection_snapshot.inspection)
+        if inspection_snapshot.person_detected:
+            self.person_warning_var.set(
+                f"⚠ 사람 감지됨 ({inspection_snapshot.person_count}명) — 검수 구역 확인 필요"
+            )
+        else:
+            self.person_warning_var.set("")
         self.after(CARD_POLL_MS, self._poll_cards)
 
     def _log_verdict_change(self, result: InspectionResult | None) -> None:
