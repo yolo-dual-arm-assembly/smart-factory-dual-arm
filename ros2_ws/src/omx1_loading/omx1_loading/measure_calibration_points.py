@@ -21,8 +21,10 @@ import pandas as pd
 from common.camera import open_camera
 from common.omx_controller import OmxConfig, OmxController, fk_5dof
 
-CAPTURE_WIDTH = 640
-CAPTURE_HEIGHT = 480
+# click_calibration_points.py, vision_node가 쓰는 해상도와 반드시 맞춰야
+# 한다 — 다르면 픽셀 좌표 스케일이 어긋나 Homography 전체가 틀어진다.
+CAPTURE_WIDTH = 1280
+CAPTURE_HEIGHT = 720
 
 REQUIRED_COLUMNS = ["pixel_u", "pixel_v", "robot_x", "robot_y"]
 

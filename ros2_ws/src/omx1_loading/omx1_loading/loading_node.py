@@ -25,36 +25,25 @@ from rclpy.node import Node
 from project_interfaces.msg import DetectionResult
 
 from common.constants import OMX_CALIBRATION_PATH
-from common.omx_controller import OmxConfig, OmxController, gripper_percent_to_dxl
+from common.omx_controller import OmxConfig, OmxController
 from omx1_loading.coordinate_transform import OmxCalibration
 from omx1_loading.pick_ball import is_safe_approach_target
-
-# 픽 앤 플레이스 속도/타이밍 — 탁구공을 놓치지 않도록 느리게 잡았다.
-# 실기 모터가 Drive Mode(주소 10) bit2=1로 "Time-based Profile"이라
-# Profile Velocity(config.profile_velocity)는 rpm이 아니라 목표까지
-# 도달하는 데 걸리는 시간(ms)이다 — 값이 클수록 느리다(0=최대 속도).
-PICK_PLACE_PROFILE_VELOCITY = 2500  # 수평 이동/접근 구간, 2.5초
-DESCEND_PROFILE_VELOCITY = 5000  # pick·place 하강 구간, 5초로 더 느리게
-DESCEND_DURATION = 6.0  # DESCEND_PROFILE_VELOCITY(5초)보다 넉넉하게 대기
-SETTLE_WAIT_SEC = 1.0  # pick·place 하강 직전, 흔들림이 멈추길 기다리는 시간
-# 그리퍼는 move_xyz와 별개로 자기 속도(ms)를 쓰므로 열고/닫기 직전에
-# enable_torque()로 다시 눌러줘야 한다 — 안 그러면 직전 이동 속도가 남아있어
-# 그리퍼 동작이 끝나기 전에 다음 동작이 시작돼버린다.
-GRIPPER_PROFILE_VELOCITY = 1200  # 그리퍼 개폐 시간, 1.2초
-GRIPPER_OPEN_DURATION = 1.8  # GRIPPER_PROFILE_VELOCITY보다 넉넉하게 대기
-GRIPPER_CLOSE_DURATION = 1.8
-# 바구니에서 그리퍼를 여는 정도. 0=완전 개방, 100=완전 폐쇄(GRIPPER_CLOSE_POS).
-# 공을 놓칠 만큼만 벌리면 되는 값이라 실측 후 조정 필요.
-PLACE_RELEASE_PERCENT = 40.0
-PLACE_RELEASE_DURATION = 1.5
-# 이동 중 바구니·다른 공을 치지 않도록 접근 높이(approach_z)에 더하는 여유.
-APPROACH_Z_MARGIN = 0.06
-# 바구니 바닥을 세게 치지 않도록 place_z(놓는 높이)에 더하는 여유.
-PLACE_Z_MARGIN = 0.03
-# 캘리브레이션이 일정하게 오른쪽(사용자 기준)으로 치우쳐서 나오는 걸 보정하는 값.
-# +0.015로 시작했다가 실측해보니 오히려 더 오른쪽으로 심해져서 부호를 뒤집었다.
-# 그래도 남으면 크기를 더 키운다.
-Y_OFFSET_CORRECTION_M = -0.015
+from omx1_loading.pick_place_tuning import (
+    APPROACH_Z_MARGIN,
+    PICK_DESCEND_DURATION,
+    PICK_DESCEND_PROFILE_VELOCITY,
+    PICK_PLACE_PROFILE_VELOCITY,
+    PICK_Z_MARGIN,
+    PLACE_DESCEND_DURATION,
+    PLACE_DESCEND_PROFILE_VELOCITY,
+    PLACE_Z_MARGIN,
+    PRE_MOVE_WAIT_SEC,
+    SETTLE_WAIT_SEC,
+    Y_OFFSET_CORRECTION_M,
+    gripper_close_and_wait,
+    gripper_open_and_wait,
+    gripper_release_and_wait,
+)
 
 
 class ArmControllerNode(Node):
@@ -154,29 +143,28 @@ class ArmControllerNode(Node):
         )
         self.busy = True
         try:
+            time.sleep(PRE_MOVE_WAIT_SEC)  # 탐지 확정 직후 바로 움직이지 않고 대기
             self.controller.config.profile_velocity = PICK_PLACE_PROFILE_VELOCITY
-            self.controller.move_xyz(rx, ry, travel_z, duration=3.0)
+            self.controller.move_xyz(rx, ry, travel_z, duration=2.0)
             time.sleep(SETTLE_WAIT_SEC)  # pick 하강 직전, 흔들림이 멈추길 대기
 
-            self._gripper_open_and_wait()
-            self.controller.config.profile_velocity = DESCEND_PROFILE_VELOCITY
-            self.controller.move_xyz(rx, ry, cal.pick_z, duration=DESCEND_DURATION)
-            self._gripper_close_and_wait()
+            gripper_open_and_wait(self.controller)
+            self.controller.config.profile_velocity = PICK_DESCEND_PROFILE_VELOCITY
+            pick_target_z = cal.pick_z + PICK_Z_MARGIN
+            self.controller.move_xyz(rx, ry, pick_target_z, duration=PICK_DESCEND_DURATION)
+            gripper_close_and_wait(self.controller)
 
             self.controller.config.profile_velocity = PICK_PLACE_PROFILE_VELOCITY
-            self.controller.move_xyz(rx, ry, travel_z, duration=2.5)
+            self.controller.move_xyz(rx, ry, travel_z, duration=1.7)
             px, py = cal.place_pos
-            self.controller.move_xyz(px, py, travel_z, duration=3.5)
+            self.controller.move_xyz(px, py, travel_z, duration=2.3)
             time.sleep(SETTLE_WAIT_SEC)  # place 하강 직전, 흔들림이 멈추길 대기
 
-            self.controller.config.profile_velocity = DESCEND_PROFILE_VELOCITY
+            self.controller.config.profile_velocity = PLACE_DESCEND_PROFILE_VELOCITY
             place_target_z = cal.place_z + PLACE_Z_MARGIN
-            self.controller.move_xyz(px, py, place_target_z, duration=DESCEND_DURATION)
+            self.controller.move_xyz(px, py, place_target_z, duration=PLACE_DESCEND_DURATION)
 
-            self.controller.set_gripper_position(
-                gripper_percent_to_dxl(PLACE_RELEASE_PERCENT)
-            )
-            time.sleep(PLACE_RELEASE_DURATION)
+            gripper_release_and_wait(self.controller)
 
             # 바구니 바닥 근처(숙인 자세)에서 바로 home()으로 보간하면 팔이
             # 스스로에 걸린다 — 안전 높이로 먼저 들어올린다. 여기서 끝내고
@@ -184,21 +172,11 @@ class ArmControllerNode(Node):
             # 다음 탐지가 바로 여기서(이미 든 상태로) 재시도하고, 진짜 없으면
             # watchdog(check_watchdog→command_stop)이 알아서 home으로 보낸다.
             self.controller.config.profile_velocity = PICK_PLACE_PROFILE_VELOCITY
-            self.controller.move_xyz(px, py, travel_z, duration=3.0)
+            self.controller.move_xyz(px, py, travel_z, duration=2.0)
         finally:
             self.busy = False
             self.tracking = False
             self.hit_count = 0
-
-    def _gripper_open_and_wait(self) -> None:
-        self.controller.config.profile_velocity = GRIPPER_PROFILE_VELOCITY
-        self.controller.enable_torque()  # 그리퍼 속도(ms) 갱신 — 팔은 정지 상태라 안전
-        self.controller.gripper_open(duration=GRIPPER_OPEN_DURATION)
-
-    def _gripper_close_and_wait(self) -> None:
-        self.controller.config.profile_velocity = GRIPPER_PROFILE_VELOCITY
-        self.controller.enable_torque()
-        self.controller.gripper_close(duration=GRIPPER_CLOSE_DURATION)
 
     def command_home(self) -> None:
         self.get_logger().info("HOME — 탐지 끊김, 대기 자세로 복귀")
