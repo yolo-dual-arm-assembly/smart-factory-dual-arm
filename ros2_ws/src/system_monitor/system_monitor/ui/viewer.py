@@ -201,6 +201,14 @@ class OperatorDashboard(tk.Tk):
             f"프로그램을 다시 켜면 설정값 {self._configured_target_count()}개로 돌아갑니다)"
         )
 
+    def _on_safe_mode_toggle(self) -> None:
+        """세이프 모드 체크박스에서. 꺼지면 이미 뜬 경고도 즉시 지운다."""
+        enabled = self.safe_mode_var.get()
+        self.cameras[CAM_INSPECTION].set_person_detection_enabled(enabled)
+        if not enabled:
+            self._hide_person_warning()
+        print(f"[검수 캠] 세이프 모드(사람 감지) {'켜짐' if enabled else '꺼짐'}")
+
     def _inspection_model_status(self) -> str:
         """검수 캠이 쓸 모델을 사람이 읽을 한 줄로. 없으면 무엇을 해야 하는지 알린다."""
         path = self.inspection_model_path
@@ -413,6 +421,19 @@ class OperatorDashboard(tk.Tk):
             tools, text="OMX 1↔2 포트 바꾸기", command=self.swap_arm_roles
         )
         self.swap_arm_button.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+        self.safe_mode_var = tk.BooleanVar(value=True)
+        self.safe_mode_check = ttk.Checkbutton(
+            tools,
+            text="세이프 모드 (검수 캠 사람 감지 경고)",
+            variable=self.safe_mode_var,
+            command=self._on_safe_mode_toggle,
+        )
+        self.safe_mode_check.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        if not PERSON_MODEL_PATH.is_file():
+            # 모델이 없으면 애초에 켤 게 없다 — 상태를 정직하게 반영한다.
+            self.safe_mode_var.set(False)
+            self.safe_mode_check.configure(state="disabled")
 
         # 자동 배정은 장치 열거 순서를 따를 뿐이라 두 캠이 반대로 잡히거나 한
         # 대만 잡히는 일이 흔하다. 사람이 직접 고칠 수단을 함께 둔다.
