@@ -34,7 +34,7 @@ from system_monitor.ui.arm_monitor import ArmMonitor
 from system_monitor.ui.camera_feed import CameraFeed
 from system_monitor.ui.console import ConsolePanel, ConsoleRedirector
 from system_monitor.ui.device_cards import (
-    COLOR_WARN,
+    COLOR_ERROR,
     ArmStatusCard,
     CameraStatusCard,
     InspectionResultBar,
@@ -97,6 +97,9 @@ INSPECTION_MODEL_PATH = MODELS_DIR / "best.pt"
 # 화면에 경고만 띄운다(로봇 정지 연동 없음). vision_inspection의 모델 다운로드
 # 목록에 이미 등록돼 있어 없으면 그쪽에서 받으면 된다.
 PERSON_MODEL_PATH = MODELS_DIR / "yolov8n.pt"
+# 경고 팝업 배경색. 눈에 띄어야 하므로 카드/라벨에 쓰는 COLOR_WARN(연한 황색)이
+# 아니라 더 강한 COLOR_ERROR를 쓴다.
+PERSON_WARNING_BG = COLOR_ERROR
 
 # 설정 파일에서 기준 개수를 꺼 뒀을 때 스핀박스에 띄울 값.
 DEFAULT_TARGET_COUNT = 1
@@ -303,21 +306,58 @@ class OperatorDashboard(tk.Tk):
         self.result_bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 0))
 
     def _build_person_warning(self) -> None:
-        """검수 캠에 사람이 잡히면 뜨는 경고. 로봇 정지 연동은 없다(표시만)."""
+        """검수 캠에 사람이 잡히면 뜨는 큰 경고 팝업. 로봇 정지 연동은 없다(표시만).
+
+        폴링마다 새로 만들지 않고 하나만 만들어 두고 deiconify/withdraw로
+        여닫는다 — 계속 반복되는 상태 표시라 messagebox처럼 매번 확인을
+        요구하면 오히려 방해가 된다.
+        """
+        popup = tk.Toplevel(self)
+        popup.title("⚠ 경고")
+        popup.configure(background=PERSON_WARNING_BG)
+        popup.attributes("-topmost", True)
+        # 사용자가 닫아도 다음 폴링에서 사람이 여전히 잡히면 다시 뜬다 —
+        # 그래서 destroy 대신 숨기기만 한다.
+        popup.protocol("WM_DELETE_WINDOW", popup.withdraw)
+        popup.withdraw()
+
+        # ttk.Label의 background는 테마에 따라 무시될 수 있어(활성 테마가 배경을
+        # 덮어씀), 색이 반드시 먹어야 하는 이 경고는 일반 tk.Label을 쓴다.
         self.person_warning_var = tk.StringVar(value="")
-        self.person_warning_label = ttk.Label(
-            self,
+        tk.Label(
+            popup,
             textvariable=self.person_warning_var,
-            anchor="w",
-            foreground=COLOR_WARN,
+            font=(self.ui_font_family, 28, "bold"),
+            fg="white",
+            bg=PERSON_WARNING_BG,
+            anchor="center",
+            justify="center",
+            padx=40,
+            pady=40,
+            wraplength=560,
+        ).pack(fill="both", expand=True)
+        self.person_warning_popup = popup
+
+    def _show_person_warning(self, count: int) -> None:
+        self.person_warning_var.set(
+            f"⚠ 위험\n검수 구역에 사람 감지됨 ({count}명)"
         )
-        self.person_warning_label.grid(
-            row=3, column=0, sticky="ew", padx=10, pady=(4, 0)
-        )
+        popup = self.person_warning_popup
+        if not popup.winfo_viewable():
+            self.update_idletasks()
+            width, height = 640, 260
+            x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+            y = self.winfo_rooty() + (self.winfo_height() - height) // 2
+            popup.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
+            popup.deiconify()
+            popup.lift()
+
+    def _hide_person_warning(self) -> None:
+        self.person_warning_popup.withdraw()
 
     def _build_integrated_bar(self) -> None:
         bar = ttk.LabelFrame(self, text="통합 공정", padding=(10, 6))
-        bar.grid(row=4, column=0, sticky="ew", padx=10, pady=(8, 0))
+        bar.grid(row=3, column=0, sticky="ew", padx=10, pady=(8, 0))
         bar.columnconfigure(2, weight=1)
 
         self.integrated_button = ttk.Button(
@@ -340,7 +380,7 @@ class OperatorDashboard(tk.Tk):
 
     def _build_tools_and_console(self) -> None:
         bottom = ttk.Frame(self, padding=(10, 8, 10, 10))
-        bottom.grid(row=5, column=0, sticky="nsew")
+        bottom.grid(row=4, column=0, sticky="nsew")
         # 도구를 세로로 쌓으면 이 행이 창의 절반을 먹어 영상이 눌린다.
         # OMX1 도구 · OMX2 분류 · 카메라 배정 · 콘솔을 가로로 나란히 둔다.
         bottom.columnconfigure(3, weight=1)
@@ -962,11 +1002,9 @@ class OperatorDashboard(tk.Tk):
         )
         self._log_verdict_change(inspection_snapshot.inspection)
         if inspection_snapshot.person_detected:
-            self.person_warning_var.set(
-                f"⚠ 사람 감지됨 ({inspection_snapshot.person_count}명) — 검수 구역 확인 필요"
-            )
+            self._show_person_warning(inspection_snapshot.person_count)
         else:
-            self.person_warning_var.set("")
+            self._hide_person_warning()
         self.after(CARD_POLL_MS, self._poll_cards)
 
     def _log_verdict_change(self, result: InspectionResult | None) -> None:
