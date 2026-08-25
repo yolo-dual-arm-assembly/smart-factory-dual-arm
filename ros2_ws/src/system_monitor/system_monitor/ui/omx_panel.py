@@ -24,7 +24,6 @@ from system_monitor.ui.device_roles import fallback_omx_port
 
 PortCallback = Callable[[], "str | None"]
 ToolLifecycleCallback = Callable[[str], None]
-ShutdownReadyCallback = Callable[[], None]
 
 
 class OmxPanel(ttk.LabelFrame):
@@ -146,14 +145,8 @@ class OmxPanel(ttk.LabelFrame):
 
     # ------------------------------------------------------------------ 종료
 
-    def request_close(self, on_ready: ShutdownReadyCallback) -> bool:
-        """종료를 준비하고 즉시 닫아도 되면 True를 반환한다.
-
-        ``on_ready``는 예전 비전 작업의 비동기 종료용 서명을 유지한 것이다.
-        지금은 기다릴 스레드가 없어 쓰지 않지만, 대시보드 종료 흐름을 바꾸지
-        않으려고 서명을 남겨 둔다.
-        """
-        del on_ready
+    def request_close(self) -> bool:
+        """종료를 준비하고 즉시 닫아도 되면 True를 반환한다."""
         if self.is_busy():
             messagebox.showinfo(
                 "OMX 도구 실행 중",

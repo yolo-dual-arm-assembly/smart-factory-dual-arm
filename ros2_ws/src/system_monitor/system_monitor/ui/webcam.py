@@ -25,12 +25,8 @@ import cv2
 from PIL import Image, ImageTk
 from ultralytics import YOLO
 
-from common.camera import (
-    _linux_camera_indexes,
-    open_camera,
-    open_preferred_camera,
-    preferred_camera_indexes,
-)
+from common.camera import open_camera, open_preferred_camera
+from system_monitor.ui.capture_metrics import annotate_and_count, update_fps
 from system_monitor.ui.ui_fonts import configure_korean_fonts
 
 WEBCAM_CONFIDENCE = 0.5
@@ -144,7 +140,7 @@ class WebcamWindow(tk.Toplevel):
                 now = time.perf_counter()
                 elapsed, last_time = now - last_time, now
                 if elapsed > 0:
-                    fps = 0.9 * fps + 0.1 / elapsed if fps else 1.0 / elapsed
+                    fps = update_fps(fps, elapsed)
 
                 with self._lock:
                     self._raw_frame = frame
@@ -153,12 +149,9 @@ class WebcamWindow(tk.Toplevel):
                     infer_fps = self._infer_fps
 
                 if result is not None:
-                    # plot은 전달한 이미지에 직접 그리므로 원본은 복사해 보호한다.
-                    annotated = result.plot(img=frame.copy())
-                    count = 0 if result.boxes is None else len(result.boxes)
+                    annotated, count = annotate_and_count(result, frame)
                 else:
-                    annotated = frame
-                    count = 0
+                    annotated, count = frame, 0
                 preview = self._scale_for_preview(annotated)
 
                 with self._lock:
@@ -191,11 +184,7 @@ class WebcamWindow(tk.Toplevel):
 
                 with self._lock:
                     self._last_result = result
-                    self._infer_fps = (
-                        0.9 * self._infer_fps + 0.1 / elapsed
-                        if self._infer_fps
-                        else 1.0 / elapsed
-                    )
+                    self._infer_fps = update_fps(self._infer_fps, elapsed)
         except Exception as error:
             traceback.print_exc()
             with self._lock:

@@ -12,18 +12,19 @@ Explore 에이전트 3개로 코드베이스 전체를 병렬 조사해 작성�
 
 ## 우선순위 요약
 
-**2026-08-24 갱신:** 최우선 항목이던 `omx2_sorting` PASS/REJECT 러너 중복 제거를
-`feat/omx2-sorting` 브랜치에서 완료해 `dev`에 병합했다(PR #14). 자세한 내용은
-[omx2_sorting #1](#1-packageroot--configdir--passreject-러너가-5개-파일에-중복-완료-2026-08-24)
-참고. 아래는 그다음으로 손대면 좋은 항목들이다 — 노력 대비 효과가 크고, 대부분
-공유 변경이 필요 없다.
+**2026-08-24 갱신:** `omx2_sorting` PASS/REJECT 러너 중복 제거(`feat/omx2-sorting`
+→ `dev`, PR #14), `system_monitor` 죽은 코드 3종([#3](#3-webcampy-미사용-import-완료-2026-08-24)·
+[#4](#4-죽은-클래스-armmonitorgroup-완료-2026-08-24)·[#5](#5-죽은-매개변수-omxpanelrequest_closeon_ready-완료-2026-08-24)),
+`webcam.py`/`camera_feed.py` 캡처 계산 중복 제거([#1](#1-webcampy-vs-camera_feedpy--캡처추론-엔진-중복-완료-2026-08-24)),
+통합공정 오케스트레이션 분리([#2](#2-통합공정-오케스트레이션이-gui-클래스에-파묻혀-테스트-불가-완료-2026-08-24))까지
+전부 `feat/GUI` 브랜치에서 완료했다. 아래는 그다음으로 손대면 좋은 항목들이다.
 
 | 항목 | 담당 패키지 | 노력 | 왜 먼저인가 |
 |---|---|---|---|
-| system_monitor 죽은 코드 3종 정리 ([#3](#3-webcampy-미사용-import)·[#4](#4-죽은-클래스-armmonitorgroup)·[#5](#5-죽은-매개변수-omxpanelrequest_closeon_ready)) | system_monitor | XS 각각 | 셋 다 몇 분짜리 삭제, 위험 0. 방금 omx2_sorting에서 한 것처럼 한 세션에 바로 처리 가능 |
 | `common.camera.open_camera()` 사용 ([omx1_loading #5](#5-pick_ballpyrun_vision_pickpy가-commoncameraopen_camera를-우회)) | omx1_loading | S | 픽업 경로와 교시/모방 경로에서 카메라가 실제로 다르게 동작하는 잠재 버그 제거, 공유 합의 불필요 |
-| `RobotState` enum 사용, raw 문자열 제거 ([omx2_sorting #5](#5-손으로-쓴-passreject-문자열-robotstate-enum-미사용)) | omx2_sorting | S | 방금 손댄 `motion_runner.py`/`waypoints.py`와 같은 영역이라 맥락을 유지한 채 이어서 하기 좋음 |
-| `webcam.py`/`camera_feed.py` 캡처 엔진 통합 ([system_monitor #1](#1-webcampy-vs-camera_feedpy--캡처추론-엔진-중복)) | system_monitor | M | 문자 그대로 복붙된 코드(FPS 계산식 4곳 중복), 버그 수정이 한쪽에만 반영될 위험 — 가장 큰 단일 임팩트 |
+| `RobotState` enum 사용, raw 문자열 제거 ([omx2_sorting #5](#5-손으로-쓴-passreject-문자열-robotstate-enum-미사용)) | omx2_sorting | S | omx2_sorting 리팩토링 때 손댄 `motion_runner.py`/`waypoints.py`와 같은 영역이라 맥락 재사용이 쉬움 |
+| GUI가 raw `YOLO(...)` 재구현 ([system_monitor #9](#9-gui가-raw-yolo를-재구현-cross-package-소비-측만)) | system_monitor | S | 방금 만진 `webcam.py`/`camera_feed.py`가 바로 그 세 호출부 중 두 곳이라 맥락 유지한 채 이어서 하기 좋음 |
+| "지연 import + 모든 예외 삼킴" 패턴 통합 ([system_monitor #8](#8-지연-import--모든-예외-삼킴-패턴이-3번-반복)) | system_monitor | S-M | `viewer.py` 오케스트레이션을 방금 정리한 김에, 같은 파일에 남은 방어적 호출 중복도 이어서 정리하기 좋음 |
 
 `common`에 `OMX2_CONFIG_DIR` 추가([common #1](#1-commonconstantspy에-omx2configdir이-없음))는
 omx2_sorting #1이 패키지 로컬로 이미 중복을 해소해서 긴급도가 낮아졌다 — 자세한
@@ -66,39 +67,38 @@ omx2_sorting #1이 패키지 로컬로 이미 중복을 해소해서 긴급도�
 
 ## system_monitor (GUI)
 
-### 1. webcam.py vs camera_feed.py — 캡처+추론 엔진 중복
+### 1. webcam.py vs camera_feed.py — 캡처+추론 엔진 중복 — ✅ 완료 (2026-08-24)
 
-- **위치:** `webcam.py:127-214`(`_capture_worker`, `_inference_worker`), `camera_feed.py:252-358`(동일 역할)
-- **문제:** 독립적인 두 개의 ~150줄짜리 이중 스레드 엔진이 거의 같은 일을 한다. FPS 지수이동평균 공식이 4곳(`webcam.py:147,195`, `camera_feed.py:282,355`)에 문자 그대로 복사돼 있고, 어노테이션+카운트 코드도 동일(`webcam.py:157-158`, `camera_feed.py:294-295`).
-- **개선 방향:** `WebcamWindow`를 `CameraFeed`(이미 `snapshot()`/`take_preview()` 제공)를 내부에서 조합하는 얇은 `tk.Toplevel`로 만들거나, 캡처/추론 스레드를 공유 클래스로 추출.
+- **위치(당시):** `webcam.py:127-214`(`_capture_worker`, `_inference_worker`), `camera_feed.py:252-358`(동일 역할)
+- **문제(당시):** 독립적인 두 개의 ~150줄짜리 이중 스레드 엔진이 거의 같은 일을 한다. FPS 지수이동평균 공식이 4곳(`webcam.py:147,195`, `camera_feed.py:282,355`)에 문자 그대로 복사돼 있고, 어노테이션+카운트 코드도 동일(`webcam.py:157-158`, `camera_feed.py:294-295`).
+- **완료 기록 (2026-08-24):** 두 클래스를 하나로 합치는 대신, 실제로 문자 그대로 겹치던 순수 계산 2개만 `system_monitor/ui/capture_metrics.py`로 뽑아냈다 — `update_fps()`(FPS EMA)와 `annotate_and_count()`(YOLO 결과 그리기+박스 카운트). 클래스를 통째로 합치지 않은 이유: `CameraFeed`는 안정화 게이트(PASS/REJECT 판정)까지 캡처 루프 안에서 계산하는데, `WebcamWindow`는 임의 모델을 테스트하는 범용 뷰어라 그 판정 로직을 강제로 끌어오면 오히려 결합이 나빠진다. 재시도 루프·상태 모델(튜플 vs dataclass)·오류 복구 정책처럼 실제로 다른 부분은 각자 유지했다. `tests/test_capture_metrics.py` 신규 — 하드웨어/GUI 없이 순수 함수만 테스트.
 - **노력:** M · **범위:** 패키지 로컬
 
-### 2. 통합공정 오케스트레이션이 GUI 클래스에 파묻혀 테스트 불가
+### 2. 통합공정 오케스트레이션이 GUI 클래스에 파묻혀 테스트 불가 — ✅ 완료 (2026-08-24)
 
-- **위치:** `viewer.py:414-490`(`start_integrated_process`, 77줄), `viewer.py:513-593`(`_integrated_worker`, 81줄), `viewer.py:595-629`(`_run_loading_once`, 35줄 — 메서드 안에 클래스를 중첩 정의)
-- **문제:** 실제 픽업→검사→분류 오케스트레이션 로직이 `OperatorDashboard(tk.Tk)` 안에 있어 디스플레이 없이는 인스턴스화도 테스트도 불가능하다. 같은 파일의 `integrated_process.py::build_process_plan`은 의도적으로 GUI/장비 없이 만들어져 실제로 테스트되는데(`test_integrated_process.py`), 실행 로직 쪽은 같은 처리를 못 받았다.
-- **개선 방향:** "사이클 1회 실행" 시퀀싱을 `build_process_plan`과 같은 패턴으로 순수 함수/클래스로 추출.
+- **위치(당시):** `viewer.py:414-490`(`start_integrated_process`, 77줄), `viewer.py:513-593`(`_integrated_worker`, 81줄), `viewer.py:595-629`(`_run_loading_once`, 35줄 — 메서드 안에 클래스를 중첩 정의)
+- **문제(당시):** 실제 픽업→검사→분류 오케스트레이션 로직이 `OperatorDashboard(tk.Tk)` 안에 있어 디스플레이 없이는 인스턴스화도 테스트도 불가능했다. 같은 파일의 `integrated_process.py::build_process_plan`은 의도적으로 GUI/장비 없이 만들어져 실제로 테스트되는데(`test_integrated_process.py`), 실행 로직 쪽은 같은 처리를 못 받았다.
+- **완료 기록 (2026-08-24):** `integrated_process.py`에 `run_process_cycle()`을 추가했다 — 적재→검사→분류 순서, 취소 처리(`ProcessCancelled`), 단계별 예외 처리를 전부 순수 함수로 옮기고, 실제 장치 호출(`_run_loading_once`/`_wait_for_fresh_inspection`/`_run_sorting_once`)과 Tk 상태 표시(`_set_integrated_status`)는 콜백으로 주입받는다. `build_process_plan`과 같은 파일에 두어 "계획 수립"과 "계획 실행"이 나란히 테스트되게 했다. `viewer.py`의 `_integrated_worker`는 이제 콜백 3개를 묶어 `run_process_cycle()`을 호출하는 얇은 어댑터로 줄었다(81줄 → 약 25줄). 기존 `_ProcessCancelled`(viewer.py 로컬 클래스)는 `integrated_process.ProcessCancelled`로 통합해 중복을 없앴다 — `_run_loading_once`/`_wait_for_fresh_inspection`의 중간 취소 체크(`_raise_if_integrated_cancelled`)는 하드웨어 호출 도중 체크라 그대로 viewer.py에 남겼다. `tests/test_integrated_process.py`에 8개 테스트 신규(정상 완주·단계 건너뛰기·검사 타임아웃(partial)·분류 실패·취소·취소 중 발생한 별개 예외를 취소로 분류하는지까지).
+- **의도적으로 남긴 사소한 차이:** 원래 코드는 `loading_port`/`imitation_index`가 실행 직전에 사라졌는지 먼저 확인한 *뒤* 상태 텍스트를 "1/3 진행 중"으로 바꿨다. 콜백 주입 구조에서는 상태 텍스트가 먼저 바뀌고 그다음 콜백 안에서 None 체크가 일어난다 — 최종 결과(실패 상태·동일한 오류 메시지)는 같고, 이 레이스 자체가 극히 드문 경로(확인 대화상자 대기 중 장치가 풀리는 경우)라 실질적 영향은 없다고 판단해 그대로 뒀다.
 - **노력:** M · **범위:** 패키지 로컬
 
-### 3. `webcam.py` 미사용 import
+### 3. `webcam.py` 미사용 import — ✅ 완료 (2026-08-24)
 
-- **위치:** `webcam.py:29,32`
-- **문제:** `common.camera`의 `_linux_camera_indexes`, `preferred_camera_indexes`를 import하지만 파일 어디서도 안 쓴다. `common/camera.py`는 "옛날 코드가 import해서" 유지한다는 주석까지 있는데, 그 "옛날 코드"가 여기 하나뿐이다.
-- **개선 방향:** 미사용 import 2개 삭제.
-- **노력:** XS · **범위:** 패키지 로컬
+- **위치(당시):** `webcam.py:29,32`
+- **문제(당시):** `common.camera`의 `_linux_camera_indexes`, `preferred_camera_indexes`를 import하지만 파일 어디서도 안 쓴다. `common/camera.py`는 "옛날 코드가 import해서" 유지한다는 주석까지 있는데, 그 "옛날 코드"가 여기 하나뿐이다.
+- **완료 기록 (2026-08-24):** 미사용 import 2개 삭제(`open_camera`/`open_preferred_camera`만 남김).
 
-### 4. 죽은 클래스 `ArmMonitorGroup`
+### 4. 죽은 클래스 `ArmMonitorGroup` — ✅ 완료 (2026-08-24)
 
-- **위치:** `arm_monitor.py:237-256`
-- **문제:** `start_all`/`stop_all`/`snapshots`를 제공하지만 저장소 전체에서 호출하는 곳이 없다. `viewer.py`는 같은 목적으로 그냥 `dict[str, ArmMonitor]`를 쓴다.
-- **개선 방향:** 삭제하거나, 원래 dict를 대체할 의도였다면 교체 후 dict 쪽 삭제.
-- **노력:** XS · **범위:** 패키지 로컬
+- **위치(당시):** `arm_monitor.py:237-256`
+- **문제(당시):** `start_all`/`stop_all`/`snapshots`를 제공하지만 저장소 전체에서 호출하는 곳이 없다. `viewer.py`는 같은 목적으로 그냥 `dict[str, ArmMonitor]`를 쓴다.
+- **완료 기록 (2026-08-24):** 클래스 삭제. `viewer.py`의 `dict[str, ArmMonitor]` 사용은 그대로 유지(원래 대체 대상이 아니라 별개 경로였음을 재확인).
 
-### 5. 죽은 매개변수 `OmxPanel.request_close(on_ready)`
+### 5. 죽은 매개변수 `OmxPanel.request_close(on_ready)` — ✅ 완료 (2026-08-24)
 
-- **위치:** `omx_panel.py:149-164`, 호출부 `viewer.py:1037-1039`
-- **문제:** `on_ready` 콜백을 받아 바로 `del on_ready`(자체 주석으로 죽은 코드임을 인정). 호출부는 `self._finish_close`를 넘기고 바로 뒤에서 무조건 다시 호출한다.
-- **개선 방향:** 매개변수 제거, 호출부 정리.
+- **위치(당시):** `omx_panel.py:149-164`, 호출부 `viewer.py:1037-1039`
+- **문제(당시):** `on_ready` 콜백을 받아 바로 `del on_ready`(자체 주석으로 죽은 코드임을 인정). 호출부는 `self._finish_close`를 넘기고 바로 뒤에서 무조건 다시 호출한다.
+- **완료 기록 (2026-08-24):** 매개변수와 이제 안 쓰는 `ShutdownReadyCallback` 타입 별칭 삭제. `viewer.py:1037`을 `self.omx_panel.request_close()`로 정리. `feat/GUI` 브랜치에서 진행.
 - **노력:** XS · **범위:** 패키지 로컬
 
 ### 6. `omx_manual_control.py::_build_ui`가 134줄짜리 모놀리스
