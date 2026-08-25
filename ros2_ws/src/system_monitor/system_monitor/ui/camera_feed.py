@@ -106,6 +106,9 @@ class CameraFeed:
         self._infer_fps = 0.0
         self._person_detected = False
         self._person_count = 0
+        # 세이프 모드 켜짐/꺼짐. 스레드는 계속 돌지만 꺼져 있으면 추론을
+        # 건너뛴다 — 버튼으로 토글할 때마다 스레드를 새로 만들지 않기 위함.
+        self._person_enabled = True
         self._released = False
         self._snapshot = CameraSnapshot(index=index, name=name)
         # 운영 중에만 쓰는 기준 개수 덮어쓰기. None이면 설정 파일 값을 그대로
@@ -220,6 +223,18 @@ class CameraFeed:
     def target_count(self) -> int | None:
         with self._lock:
             return self._target_count
+
+    def set_person_detection_enabled(self, enabled: bool) -> None:
+        """세이프 모드(사람 감지 경고) 버튼에서 부른다.
+
+        스레드를 새로 만들거나 죽이지 않는다 — 계속 돌되 꺼져 있으면 추론을
+        건너뛴다. 끌 때는 이미 떠 있는 경고도 즉시 지운다.
+        """
+        with self._lock:
+            self._person_enabled = enabled
+            if not enabled:
+                self._person_detected = False
+                self._person_count = 0
 
     def set_device(self, index: int | None, name: str = "") -> None:
         """사용자가 카메라를 바꿨을 때. 피드를 다시 시작한다."""
@@ -395,9 +410,10 @@ class CameraFeed:
         processed_seq = 0
         while not self._stop_event.is_set():
             with self._lock:
+                enabled = self._person_enabled
                 frame = self._raw_frame
                 seq = self._raw_seq
-            if frame is None or seq == processed_seq:
+            if not enabled or frame is None or seq == processed_seq:
                 time.sleep(IDLE_SLEEP_SEC)
                 continue
             processed_seq = seq
