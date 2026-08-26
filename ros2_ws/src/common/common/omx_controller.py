@@ -649,9 +649,14 @@ class OmxController:
         )
 
     def _set_profile_velocity(self, dxl_id: int, velocity: int) -> None:
-        self._packet_handler.write4ByteTxRx(  # type: ignore[union-attr]
+        result, error = self._packet_handler.write4ByteTxRx(  # type: ignore[union-attr]
             self._port_handler, dxl_id, ADDR_PROFILE_VELOCITY, velocity
         )
+        if result != COMM_SUCCESS:
+            print(
+                f"[OMX] 속도 설정 오류 ID={dxl_id}: "
+                f"{self._packet_handler.getTxRxResult(result)}"  # type: ignore[union-attr]
+            )
 
     def _write_goal_position(self, dxl_id: int, position: int) -> None:
         result, _error = self._packet_handler.write4ByteTxRx(  # type: ignore[union-attr]

@@ -153,6 +153,20 @@ class OmxCalibration:
         rx, ry = float(result[0, 0, 0]), float(result[0, 0, 1])
         return rx, ry, self.pick_z
 
+    def robot_to_pixel(self, x: float, y: float) -> tuple[float, float]:
+        """로봇 XY(미터)를 픽셀 좌표로 변환한다 (pixel_to_robot의 역변환).
+
+        화면에 안전 영역 등을 겹쳐 그릴 때 쓴다.
+        """
+        if self._H is None:
+            raise RuntimeError(
+                "Homography 미계산. compute() 또는 load()를 먼저 호출하세요."
+            )
+        h_inv = np.linalg.inv(self._H)
+        pt = np.array([[[x, y]]], dtype=np.float32)
+        result = cv2.perspectiveTransform(pt, h_inv)
+        return float(result[0, 0, 0]), float(result[0, 0, 1])
+
     def reprojection_error(self) -> float:
         """재투영 오차 평균(미터)을 반환한다."""
         if self._H is None:

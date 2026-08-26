@@ -14,8 +14,9 @@ from omx1_loading.coordinate_transform import OmxCalibration, make_full_frame_ca
 
 
 CALIBRATION_PREVIEW_SIZE = (960, 540)
-CALIBRATION_X_RANGE_CM = (10.0, 25.0)
-CALIBRATION_Y_RANGE_CM = (-15.0, 15.0)
+# 실측(그리퍼를 화면 네 모서리에 대고 GUI XYZ 판독): X -17.1~4.2cm, Y -33.4~-14.5cm
+CALIBRATION_X_RANGE_CM = (-20.0, 6.0)
+CALIBRATION_Y_RANGE_CM = (-36.0, -12.0)
 
 
 class OmxCalibrationWindow(tk.Toplevel):
@@ -102,7 +103,8 @@ class OmxCalibrationWindow(tk.Toplevel):
             controls,
             text=(
                 "X/Y를 입력하고 영상의 해당 지점을 클릭하세요. "
-                "로봇 기준 X=10~25cm, Y=-15~15cm이며 9점을 권장합니다."
+                f"로봇 기준 X={CALIBRATION_X_RANGE_CM[0]:g}~{CALIBRATION_X_RANGE_CM[1]:g}cm, "
+                f"Y={CALIBRATION_Y_RANGE_CM[0]:g}~{CALIBRATION_Y_RANGE_CM[1]:g}cm이며 9점을 권장합니다."
             ),
             foreground="#555555",
         ).grid(row=1, column=0, columnspan=10, sticky="w", pady=(8, 0))
@@ -170,8 +172,8 @@ class OmxCalibrationWindow(tk.Toplevel):
             messagebox.showerror(
                 "로봇 좌표 범위 오류",
                 "입력값은 픽셀값이 아니라 로봇 베이스 기준 cm 좌표입니다.\n\n"
-                "X: 정면 방향 10~25 cm\n"
-                "Y: 왼쪽(+) / 오른쪽(-) -15~15 cm\n\n"
+                f"X: {CALIBRATION_X_RANGE_CM[0]:g}~{CALIBRATION_X_RANGE_CM[1]:g} cm\n"
+                f"Y: {CALIBRATION_Y_RANGE_CM[0]:g}~{CALIBRATION_Y_RANGE_CM[1]:g} cm\n\n"
                 f"현재 입력: X={robot_x_cm:g}, Y={robot_y_cm:g} cm",
                 parent=self,
             )

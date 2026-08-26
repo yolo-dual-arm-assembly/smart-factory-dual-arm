@@ -278,30 +278,46 @@ class TestCalibration:
         )
 
 
+# SAFE_X/Y_RANGE는 실측 장비 기준(X -18~4cm, Y -30~-11cm)이라 그 안의 점을 쓴다.
+PICK_XY = (-0.07, -0.15)
+TRAVEL_Z = 0.08 + 0.03  # OmxCalibration.approach_z 기본값 + APPROACH_Z_MARGIN
+
+
 class TestVisionSafety:
     def test_accepts_reachable_table_target(self) -> None:
-        assert is_safe_approach_target(0.20, 0.0, 0.08)
+        assert is_safe_approach_target(*PICK_XY, TRAVEL_Z)
 
     @pytest.mark.parametrize(
         "target",
-        [(0.05, 0.0, 0.08), (0.30, 0.0, 0.08), (0.20, 0.20, 0.08)],
+        [(-0.25, -0.15, TRAVEL_Z), (0.10, -0.15, TRAVEL_Z), (-0.07, 0.0, TRAVEL_Z)],
     )
     def test_rejects_target_outside_workspace(
         self, target: tuple[float, float, float]
     ) -> None:
         assert not is_safe_approach_target(*target)
 
-    def test_rejects_calibration_points_with_wrong_units(self) -> None:
+    def test_warns_on_calibration_points_with_wrong_units(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # 대응점 이상은 실행을 막지 않고(프레임별 안전 검사가 거른다) 경고만 낸다.
         cal = OmxCalibration()
         cal.add_point((100, 100), (2.5, 3.4))
 
-        with pytest.raises(ValueError, match="다시 설정"):
-            validate_calibration_workspace(cal)
+        validate_calibration_workspace(cal)
 
-    def test_rejects_place_position_outside_workspace(self) -> None:
+        assert "작업 영역 밖 좌표 포함" in capsys.readouterr().out
+
+    def test_allows_place_position_outside_pick_rectangle(self) -> None:
+        # 바구니는 pick 사각형 밖에 있는 게 정상 — 도달 가능하면 통과해야 한다.
+        cal = OmxCalibration(place_pos=(0.2, 0.0))
+        assert not is_safe_approach_target(0.2, 0.0, TRAVEL_Z)
+
+        validate_calibration_workspace(cal)
+
+    def test_rejects_unreachable_place_position(self) -> None:
         cal = OmxCalibration(place_pos=(1.0, 0.0))
 
-        with pytest.raises(ValueError, match="배치 접근 목표가 작업 영역 밖"):
+        with pytest.raises(ValueError, match="배치 접근 목표를 실행할 수 없습니다"):
             validate_calibration_workspace(cal)
 
     def test_rejects_unreachable_place_height(self) -> None:
@@ -338,11 +354,17 @@ class TestVisionSafety:
         runner.max_stage = State.HOME
 
         with pytest.raises(ValueError, match="물체 집기 목표를 실행할 수 없습니다"):
-            runner._execute_action((0.2, 0.0, calibration.pick_z))
+            runner._execute_action((*PICK_XY, calibration.pick_z))
 
         assert controller.commands == []
+
+    def test_plan_rejects_pick_target_outside_workspace(self) -> None:
+        calibration = OmxCalibration()
+
+        with pytest.raises(ValueError, match="물체 접근 목표가 작업 영역 밖"):
+            validate_pick_place_plan((0.2, 0.0, calibration.pick_z), calibration)
 
     def test_valid_pick_place_plan_passes(self) -> None:
         calibration = OmxCalibration()
 
-        validate_pick_place_plan((0.2, 0.0, calibration.pick_z), calibration)
+        validate_pick_place_plan((*PICK_XY, calibration.pick_z), calibration)
