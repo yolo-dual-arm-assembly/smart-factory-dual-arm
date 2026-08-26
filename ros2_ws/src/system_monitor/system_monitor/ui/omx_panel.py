@@ -37,6 +37,7 @@ class OmxPanel(ttk.LabelFrame):
         omx_port: PortCallback | None = None,
         on_tool_start: ToolLifecycleCallback | None = None,
         on_tool_end: ToolLifecycleCallback | None = None,
+        on_calibrate: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master, text="OMX 1 제어", padding=8)
         self.root = master.winfo_toplevel()
@@ -45,6 +46,10 @@ class OmxPanel(ttk.LabelFrame):
         self._omx_port = omx_port or (lambda: None)
         self._on_tool_start = on_tool_start or (lambda _tool: None)
         self._on_tool_end = on_tool_end or (lambda _tool: None)
+        # 카메라 캘리브레이션 창은 카메라 소유·인계를 대시보드가 알아야 열 수
+        # 있어(모방학습 캠을 계속 붙잡고 있는 CameraFeed와 겹치면 충돌한다),
+        # 실제 로직은 대시보드에 맡기고 이 패널은 버튼만 갖는다.
+        self._on_calibrate = on_calibrate or (lambda: None)
 
         self._tool_process: subprocess.Popen | None = None
 
@@ -66,10 +71,15 @@ class OmxPanel(ttk.LabelFrame):
         )
         self.manual_button.grid(row=2, column=0, sticky="ew", pady=2)
 
+        self.calibrate_button = ttk.Button(
+            self, text="카메라 캘리브레이션", command=self._on_calibrate
+        )
+        self.calibrate_button.grid(row=3, column=0, sticky="ew", pady=2)
+
         self.status_var = tk.StringVar(value="대기")
         ttk.Label(
             self, textvariable=self.status_var, wraplength=210, anchor="w"
-        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
 
     def current_port_text(self) -> str:
         port = self._omx_port()
@@ -85,10 +95,23 @@ class OmxPanel(ttk.LabelFrame):
         return self._tool_process is not None and self._tool_process.poll() is None
 
     def set_external_busy(self, busy: bool) -> None:
-        """통합 공정이 OMX1을 소유하는 동안 수동 제어 버튼을 잠근다."""
+        """통합 공정이 OMX1을 소유하는 동안 수동 제어·캘리브레이션 버튼을 잠근다."""
         if self.is_busy():
             return
-        self.manual_button.configure(state="disabled" if busy else "normal")
+        state = "disabled" if busy else "normal"
+        self.manual_button.configure(state=state)
+        self.calibrate_button.configure(state=state)
+
+    def set_calibration_active(self, active: bool) -> None:
+        """캘리브레이션 창이 카메라를 쥐고 있는 동안 다른 버튼을 잠근다.
+
+        캘리브레이션은 subprocess가 아니라 대시보드 안에서 여는 Toplevel이라
+        ``is_busy()``(포트 점유)로는 안 잡힌다 — 대시보드가 창을 열고 닫을
+        때 직접 불러야 한다.
+        """
+        state = "disabled" if active else "normal"
+        self.manual_button.configure(state=state)
+        self.calibrate_button.configure(state=state)
 
     def _ensure_available(self) -> bool:
         if self.is_busy():
@@ -131,6 +154,7 @@ class OmxPanel(ttk.LabelFrame):
             return
         self.status_var.set("수동 관절 제어 창 실행 중")
         self.manual_button.configure(state="disabled")
+        self.calibrate_button.configure(state="disabled")
         self.after(250, self._poll_tool)
 
     def _poll_tool(self) -> None:
@@ -141,6 +165,7 @@ class OmxPanel(ttk.LabelFrame):
         self._tool_process = None
         self._on_tool_end("manual_control")
         self.manual_button.configure(state="normal")
+        self.calibrate_button.configure(state="normal")
         self.status_var.set("대기")
 
     # ------------------------------------------------------------------ 종료

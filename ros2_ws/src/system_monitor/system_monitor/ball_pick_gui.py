@@ -31,6 +31,7 @@ ensure_workspace_path(_workspace_src)
 from common.constants import OMX_CALIBRATION_PATH, PROJECT_DIR
 from common.omx_controller import OmxConfig
 from common.serial_ports import list_serial_ports
+from omx1_loading.camera_calibration import OmxCalibrationWindow
 from omx1_loading.coordinate_transform import OmxCalibration
 from omx1_loading.pick_ball import OmxVisionRunner, State
 from system_monitor.ui.device_roles import assign_omx_ports, fallback_omx_port
@@ -69,6 +70,10 @@ class BallPickGuiApp(tk.Tk):
         ttk.Label(frame, text=f"캘리브레이션: {OMX_CALIBRATION_PATH}").pack(
             anchor="w", pady=(2, 0)
         )
+        self.calibrate_button = ttk.Button(
+            frame, text="캘리브레이션 열기", command=self.open_calibration
+        )
+        self.calibrate_button.pack(fill="x", pady=(8, 0))
 
         self.status_var = tk.StringVar(value="대기 중")
         ttk.Label(
@@ -95,6 +100,23 @@ class BallPickGuiApp(tk.Tk):
             justify="left",
         ).pack(anchor="w", pady=(14, 0))
 
+    # ------------------------------------------------------------------ 캘리브레이션
+
+    def open_calibration(self) -> None:
+        if self._runner is not None:
+            messagebox.showwarning(
+                "실행 중",
+                "Pick & Place 실행 중에는 캘리브레이션을 열 수 없습니다.",
+                parent=self,
+            )
+            return
+        try:
+            OmxCalibrationWindow(
+                self, camera_index=0, save_path=OMX_CALIBRATION_PATH
+            )
+        except Exception as error:
+            messagebox.showerror("카메라 오류", str(error), parent=self)
+
     # ------------------------------------------------------------------ 실행
 
     def start(self) -> None:
@@ -114,6 +136,7 @@ class BallPickGuiApp(tk.Tk):
 
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
+        self.calibrate_button.configure(state="disabled")
         self.status_var.set("모델 로딩 및 로봇 연결 중...")
 
         self._thread = threading.Thread(target=self._run_worker, daemon=True)
@@ -144,6 +167,7 @@ class BallPickGuiApp(tk.Tk):
     def _finished(self, error: str | None) -> None:
         self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
+        self.calibrate_button.configure(state="normal")
         self.status_var.set("대기 중")
         if error is not None:
             messagebox.showerror("실행 오류", error, parent=self)

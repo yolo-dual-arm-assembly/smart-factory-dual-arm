@@ -109,6 +109,9 @@ DEFAULT_TARGET_COUNT = 1
 TOOL_DEVICE_NEEDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # 도구 이름: (놓아야 할 팔, 놓아야 할 카메라)
     "manual_control": ((ARM_LOADING,), ()),
+    # 카메라 캘리브레이션 창은 모방학습 캠만 직접 열어서 쓴다 — 팔 포트는
+    # 안 건드린다(OmxCalibrationWindow는 화면 클릭+좌표 입력만 함).
+    "omx1_calibration": ((), (CAM_IMITATION,)),
     # 개발 도구는 자체 카메라 선택기로 아무 카메라나 열 수 있고, 수동 제어까지
     # 띄운다. 어느 것을 고를지 미리 알 수 없으므로 캠 두 대를 모두 내준다.
     "dev_console": ((ARM_LOADING,), (CAM_IMITATION, CAM_INSPECTION)),
@@ -401,6 +404,7 @@ class OperatorDashboard(tk.Tk):
             omx_port=lambda: self.arms[ARM_LOADING].port,
             on_tool_start=self.release_devices,
             on_tool_end=self.acquire_devices,
+            on_calibrate=self.open_omx1_calibration,
         )
         self.omx_panel.grid(row=0, column=0, sticky="ew")
 
@@ -985,6 +989,58 @@ class OperatorDashboard(tk.Tk):
         self.acquire_devices("dev_console")
         if self.winfo_exists() and not self._integrated_is_running():
             self.dev_button.configure(state="normal")
+
+    def open_omx1_calibration(self) -> None:
+        """모방학습 캠으로 OMX1 카메라 캘리브레이션 창을 연다.
+
+        이 창은 subprocess가 아니라 대시보드 안에서 직접 여는 Toplevel이라,
+        상시 실행 중인 모방학습 캠 CameraFeed와 같은 장치를 동시에 열면
+        충돌한다. 그래서 다른 도구들과 같은 release/acquire 인계를 쓴다.
+        """
+        if (
+            self._integrated_is_running()
+            or self.omx_panel.is_busy()
+            or self.sorting_panel.is_busy()
+            or (self._dev_process is not None and self._dev_process.poll() is None)
+            or bool(self._released_by)
+        ):
+            messagebox.showwarning(
+                "다른 작업 실행 중",
+                "통합 공정·수동 제어·분류·개발 도구를 먼저 종료한 뒤 "
+                "캘리브레이션을 여세요.",
+                parent=self,
+            )
+            return
+
+        index = self.cameras[CAM_IMITATION].index
+        if index is None:
+            messagebox.showerror(
+                "카메라 없음",
+                "모방학습 캠이 배정되지 않았습니다. 카메라 배정을 먼저 확인하세요.",
+                parent=self,
+            )
+            return
+
+        self.release_devices("omx1_calibration")
+        self.omx_panel.set_calibration_active(True)
+        from omx1_loading.camera_calibration import OmxCalibrationWindow
+
+        def on_closed() -> None:
+            self.acquire_devices("omx1_calibration")
+            if self.winfo_exists():
+                self.omx_panel.set_calibration_active(False)
+
+        try:
+            OmxCalibrationWindow(
+                self,
+                camera_index=index,
+                save_path=OMX_CALIBRATION_PATH,
+                on_closed=on_closed,
+            )
+        except Exception as error:
+            self.acquire_devices("omx1_calibration")
+            self.omx_panel.set_calibration_active(False)
+            messagebox.showerror("카메라 오류", str(error), parent=self)
 
     # ------------------------------------------------------------------ 화면 갱신
 
